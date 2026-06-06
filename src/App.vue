@@ -242,6 +242,7 @@ restoreDraft();
 syncWindowTheme();
 registerMenuListeners();
 window.addEventListener("focus", handleWindowFocus);
+window.addEventListener("keydown", handleWindowsMenuShortcut);
 
 watch(
   () => ({ fileName: fileName.value, rows: rows.value }),
@@ -335,6 +336,7 @@ onBeforeUnmount(() => {
   unlistenClearList?.();
   unlistenDeleteSelected?.();
   window.removeEventListener("focus", handleWindowFocus);
+  window.removeEventListener("keydown", handleWindowsMenuShortcut);
 });
 
 function openFilePicker() {
@@ -345,8 +347,81 @@ function isLinuxPlatform() {
   return /Linux/i.test(window.navigator.userAgent);
 }
 
+function isWindowsPlatform() {
+  return /Windows/i.test(window.navigator.userAgent);
+}
+
 function handleWindowFocus() {
   syncHistoryMenuState();
+}
+
+function handleWindowsMenuShortcut(event: KeyboardEvent) {
+  if (!isWindowsPlatform()) return;
+
+  const key = event.key.toLowerCase();
+  const hasCtrl = event.ctrlKey;
+  const hasShift = event.shiftKey;
+  const hasAlt = event.altKey;
+  const hasMeta = event.metaKey;
+
+  if (hasAlt || hasMeta) return;
+
+  if (!hasCtrl && !hasShift && key === "f5") {
+    event.preventDefault();
+    refreshStatSnapshot();
+    return;
+  }
+
+  if (!hasCtrl) return;
+
+  if (!hasShift && key === "g") {
+    event.preventDefault();
+    openGoToRowDialog();
+    return;
+  }
+
+  if (!hasShift && key === "o") {
+    event.preventDefault();
+    openFilePicker();
+    return;
+  }
+
+  if (!hasShift && key === "s") {
+    event.preventDefault();
+    void saveJsonFile();
+    return;
+  }
+
+  if (hasShift && key === "o") {
+    event.preventDefault();
+    void openExcelImportDialog();
+    return;
+  }
+
+  if (hasShift && key === "s") {
+    event.preventDefault();
+    void openExcelExportDialog();
+    return;
+  }
+
+  if (hasShift && key === "e") {
+    event.preventDefault();
+    invoke("open_encoding_manager_window").catch((error) => {
+      console.warn("Failed to open Encoding Manager.", error);
+    });
+    return;
+  }
+
+  if (!hasShift && key === "delete") {
+    event.preventDefault();
+    void deleteSelectedRows();
+    return;
+  }
+
+  if (hasShift && key === "delete") {
+    event.preventDefault();
+    void clearRows();
+  }
 }
 
 function registerMenuListeners() {

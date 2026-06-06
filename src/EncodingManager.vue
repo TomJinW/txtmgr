@@ -263,6 +263,7 @@ watch(renderedRows, () => {
 
 syncWindowTheme();
 registerMenuListeners();
+window.addEventListener("keydown", handleWindowsMenuShortcut);
 
 onBeforeUnmount(() => {
   window.clearTimeout(autoSaveTimer);
@@ -275,7 +276,39 @@ onBeforeUnmount(() => {
   rowResizeObservers.forEach((observer) => observer.disconnect());
   rowResizeObservers.clear();
   rowElements.clear();
+  window.removeEventListener("keydown", handleWindowsMenuShortcut);
 });
+
+function isWindowsPlatform() {
+  return /Windows/i.test(window.navigator.userAgent);
+}
+
+function handleWindowsMenuShortcut(event: KeyboardEvent) {
+  if (!isWindowsPlatform()) return;
+
+  const key = event.key.toLowerCase();
+  const hasCtrl = event.ctrlKey;
+  const hasShift = event.shiftKey;
+
+  if (!hasCtrl || event.altKey || event.metaKey) return;
+
+  if (!hasShift && key === "g") {
+    event.preventDefault();
+    openGoToRowDialog();
+    return;
+  }
+
+  if (!hasShift && key === "delete") {
+    event.preventDefault();
+    void deleteSelectedRows();
+    return;
+  }
+
+  if (hasShift && key === "delete") {
+    event.preventDefault();
+    void clearRows();
+  }
+}
 
 function registerMenuListeners() {
   listen("encoding-import", () => {

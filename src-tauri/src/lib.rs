@@ -184,6 +184,11 @@ fn set_history_menu_enabled(
     Ok(())
 }
 
+#[tauri::command]
+fn open_encoding_manager_window(app: AppHandle) -> Result<(), String> {
+    open_encoding_manager(&app).map_err(|error| error.to_string())
+}
+
 fn build_encoding_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
     let import_encoding =
         MenuItemBuilder::with_id(ENCODING_IMPORT_MENU_ID, "Import...")
@@ -483,7 +488,11 @@ pub fn run() {
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![greet, set_history_menu_enabled])
+        .invoke_handler(tauri::generate_handler![
+            greet,
+            open_encoding_manager_window,
+            set_history_menu_enabled
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
