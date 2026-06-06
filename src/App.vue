@@ -116,9 +116,13 @@ const rowResizeObservers = new Map<number, ResizeObserver>();
 const rowElements = new Map<number, HTMLElement>();
 const rowIdentities = new WeakMap<SentenceRow, number>();
 const appWindow = getCurrentWindow();
+const tableEndSpacerWidth = 24;
 
 const gridTemplateColumns = computed(() =>
-  columnWidths.value.map((width) => `${width}px`).join(" "),
+  [
+    ...columnWidths.value.map((width) => `${width}px`),
+    `${tableEndSpacerWidth}px`,
+  ].join(" "),
 );
 
 const appShellClasses = computed(() => [
@@ -1841,13 +1845,13 @@ function startResize(columnIndex: number, event: PointerEvent) {
             </div>
           </div>
           <button
-            v-if="index < columns.length - 1"
             class="resize-handle"
             type="button"
             :aria-label="`Resize ${column.label}`"
             @pointerdown="startResize(index, $event)"
           />
         </div>
+        <div class="header-cell table-end-spacer" aria-hidden="true" />
       </div>
 
       <div v-if="rows.length === 0" class="empty-state">
@@ -2080,6 +2084,7 @@ function startResize(columnIndex: number, event: PointerEvent) {
             </div>
             <div class="textarea-measure">{{ row.file_name || " " }}</div>
           </div>
+          <div class="table-end-spacer" aria-hidden="true" />
         </div>
         <div
           class="virtual-spacer"
@@ -2761,6 +2766,12 @@ button {
   border-right: none;
 }
 
+.header-cell.table-end-spacer {
+  min-height: 58px;
+  padding: 0;
+  pointer-events: none;
+}
+
 .header-content {
   min-width: 0;
   flex: 1;
@@ -2891,7 +2902,18 @@ button {
 
 .textarea-cell:last-child,
 .select-cell:last-child {
-  border-right: none;
+  border-right-color: transparent;
+}
+
+.table-end-spacer {
+  min-height: 42px;
+  background: var(--panel-bg);
+  pointer-events: none;
+  user-select: none;
+}
+
+.header-row .table-end-spacer {
+  background: var(--header-bg);
 }
 
 .row-number-cell {
@@ -2961,6 +2983,7 @@ button {
 .select-cell > select,
 .newline-hints,
 .textarea-measure {
+  box-sizing: border-box;
   width: 100%;
   padding: 9px 10px;
   line-height: 1.45;
@@ -2973,6 +2996,7 @@ button {
 .newline-hints {
   position: absolute;
   inset: 0;
+  width: auto;
   height: 100%;
   border: 0;
   border-radius: 0;
@@ -3012,8 +3036,8 @@ button {
 .textarea-cell > textarea:focus,
 .select-cell > select:focus {
   z-index: 3;
-  outline: 2px solid var(--primary);
-  outline-offset: -2px;
+  outline: none;
+  box-shadow: inset 0 0 0 2px var(--primary);
 }
 
 .empty-state {

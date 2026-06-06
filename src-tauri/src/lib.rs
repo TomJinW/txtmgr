@@ -384,13 +384,17 @@ pub fn run() {
     tauri::Builder::default()
         .menu(build_main_menu)
         .setup(|app| {
-            #[cfg(target_os = "macos")]
             if let Some(window) = app.get_webview_window("main") {
                 let app_handle = app.handle().clone();
-                window.on_window_event(move |event| {
-                    if matches!(event, WindowEvent::Focused(true)) {
+                window.on_window_event(move |event| match event {
+                    WindowEvent::CloseRequested { .. } => {
+                        app_handle.exit(0);
+                    }
+                    #[cfg(target_os = "macos")]
+                    WindowEvent::Focused(true) => {
                         set_main_menu(&app_handle);
                     }
+                    _ => {}
                 });
             }
 
