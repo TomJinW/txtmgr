@@ -124,6 +124,11 @@ const gridTemplateColumns = computed(() =>
   columnWidths.value.map((width) => `${width}px`).join(" "),
 );
 
+const appShellClasses = computed(() => [
+  `theme-${themeMode.value}`,
+  { "platform-linux": isLinuxPlatform() },
+]);
+
 const canSaveJson = computed(() => rows.value.length > 0 && !isSaving.value);
 
 const textFilteredRows = computed(() => {
@@ -250,6 +255,10 @@ onBeforeUnmount(() => {
 
 function openFilePicker() {
   fileInput.value?.click();
+}
+
+function isLinuxPlatform() {
+  return /Linux/i.test(window.navigator.userAgent);
 }
 
 function registerMenuListeners() {
@@ -858,7 +867,7 @@ function startResize(columnIndex: number, event: PointerEvent) {
 </script>
 
 <template>
-  <main class="app-shell" :class="`theme-${themeMode}`">
+  <main class="app-shell" :class="appShellClasses">
     <section class="top-panel">
       <header class="toolbar">
         <div class="app-title">
@@ -1407,6 +1416,17 @@ button {
   --warning-border: #c2410c;
   --warning-hover: #ea580c;
   --warning-text: #fed7aa;
+}
+
+.platform-linux.theme-dark select,
+.platform-linux.theme-dark option {
+  color: var(--input-text);
+  background-color: var(--panel-bg);
+  color-scheme: dark;
+}
+
+.platform-linux.theme-dark .select-cell > select {
+  background-color: var(--panel-bg);
 }
 
 .top-panel {
