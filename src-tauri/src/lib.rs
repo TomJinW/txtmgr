@@ -337,6 +337,49 @@ fn emit_encoding_menu_event<R: Runtime, T: Emitter<R>>(target: &T, menu_id: &str
     }
 }
 
+fn emit_main_menu_event<R: Runtime, T: Emitter<R>>(
+    app: &AppHandle<R>,
+    target: &T,
+    menu_id: &str,
+) {
+    match menu_id {
+        REFRESH_FILTERS_MENU_ID => {
+            let _ = target.emit("refresh-filters", ());
+        }
+        GO_TO_ROW_MENU_ID => {
+            let _ = target.emit("open-go-to-row", ());
+        }
+        OPEN_ENCODING_MANAGER_MENU_ID => {
+            let _ = open_encoding_manager(app);
+        }
+        READ_JSON_MENU_ID => {
+            let _ = target.emit("read-json", ());
+        }
+        SAVE_JSON_MENU_ID => {
+            let _ = target.emit("save-json", ());
+        }
+        IMPORT_EXCEL_MENU_ID => {
+            let _ = target.emit("import-excel", ());
+        }
+        EXPORT_EXCEL_MENU_ID => {
+            let _ = target.emit("export-excel", ());
+        }
+        UNDO_TABLE_CHANGE_MENU_ID => {
+            let _ = target.emit("undo-table-change", ());
+        }
+        REDO_TABLE_CHANGE_MENU_ID => {
+            let _ = target.emit("redo-table-change", ());
+        }
+        CLEAR_LIST_MENU_ID => {
+            let _ = target.emit("clear-list", ());
+        }
+        DELETE_SELECTED_MENU_ID => {
+            let _ = target.emit("delete-selected", ());
+        }
+        _ => {}
+    }
+}
+
 fn open_encoding_manager<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     if let Some(window) = app.get_webview_window("encoding") {
         window.set_focus()?;
@@ -385,6 +428,16 @@ pub fn run() {
         .menu(build_main_menu)
         .setup(|app| {
             if let Some(window) = app.get_webview_window("main") {
+                #[cfg(not(target_os = "macos"))]
+                {
+                    window.set_menu(build_main_menu(app.handle())?)?;
+                }
+
+                let menu_app_handle = app.handle().clone();
+                window.on_menu_event(move |window, event| {
+                    emit_main_menu_event(&menu_app_handle, window, event.id().as_ref());
+                });
+
                 let app_handle = app.handle().clone();
                 window.on_window_event(move |event| match event {
                     WindowEvent::CloseRequested { .. } => {
@@ -424,42 +477,7 @@ pub fn run() {
             }
 
             if let Some(window) = app.get_webview_window("main") {
-                match event.id().as_ref() {
-                    REFRESH_FILTERS_MENU_ID => {
-                        let _ = window.emit("refresh-filters", ());
-                    }
-                    GO_TO_ROW_MENU_ID => {
-                        let _ = window.emit("open-go-to-row", ());
-                    }
-                    OPEN_ENCODING_MANAGER_MENU_ID => {
-                        let _ = open_encoding_manager(app);
-                    }
-                    READ_JSON_MENU_ID => {
-                        let _ = window.emit("read-json", ());
-                    }
-                    SAVE_JSON_MENU_ID => {
-                        let _ = window.emit("save-json", ());
-                    }
-                    IMPORT_EXCEL_MENU_ID => {
-                        let _ = window.emit("import-excel", ());
-                    }
-                    EXPORT_EXCEL_MENU_ID => {
-                        let _ = window.emit("export-excel", ());
-                    }
-                    UNDO_TABLE_CHANGE_MENU_ID => {
-                        let _ = window.emit("undo-table-change", ());
-                    }
-                    REDO_TABLE_CHANGE_MENU_ID => {
-                        let _ = window.emit("redo-table-change", ());
-                    }
-                    CLEAR_LIST_MENU_ID => {
-                        let _ = window.emit("clear-list", ());
-                    }
-                    DELETE_SELECTED_MENU_ID => {
-                        let _ = window.emit("delete-selected", ());
-                    }
-                    _ => {}
-                }
+                emit_main_menu_event(app, &window, event.id().as_ref());
             }
         })
         .plugin(tauri_plugin_fs::init())
