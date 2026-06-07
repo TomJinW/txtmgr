@@ -112,6 +112,7 @@ struct SentenceCoverageSource {
 type SentenceCoverageStore = Mutex<SentenceCoverageSource>;
 
 #[derive(Default)]
+#[allow(dead_code)]
 struct NativeMenuState {
     main_language: Option<String>,
     encoding_language: Option<String>,
@@ -604,6 +605,8 @@ fn set_app_language_menu(
         .and_then(|window| window.is_focused().ok())
         .unwrap_or(false);
     let language = normalize_app_language(&language);
+    #[cfg(target_os = "macos")]
+    let _ = &menu_state;
 
     #[cfg(target_os = "macos")]
     {
@@ -1110,6 +1113,11 @@ fn attach_encoding_manager_menu(
         .get_webview_window("encoding")
         .ok_or_else(|| "Encoding Manager window is not open.".to_string())?;
     let language = normalize_app_language(&language);
+    #[cfg(target_os = "macos")]
+    {
+        let _ = &menu_state;
+        let _ = &window;
+    }
 
     #[cfg(target_os = "macos")]
     {
@@ -1133,15 +1141,15 @@ fn attach_encoding_manager_menu(
         if !state.encoding_event_registered {
             state.encoding_event_registered = true;
 
-            window.on_menu_event(|window, event| {
-                emit_encoding_menu_event(window, event.id().as_ref());
+            let menu_app_handle = app.clone();
+            window.on_menu_event(move |_window, event| {
+                emit_encoding_menu_event(&menu_app_handle, event.id().as_ref());
             });
 
             let app_handle = app.clone();
             window.on_window_event(move |event| {
                 if matches!(event, WindowEvent::Destroyed) {
-                    if let Ok(mut state) = app_handle.state::<NativeMenuStateStore>().lock()
-                    {
+                    if let Ok(mut state) = app_handle.state::<NativeMenuStateStore>().lock() {
                         state.encoding_event_registered = false;
                         state.encoding_language = None;
                     }
@@ -1167,60 +1175,62 @@ fn set_encoding_menu<R: Runtime>(app: &AppHandle<R>) {
     }
 }
 
-fn emit_encoding_menu_event<R: Runtime, T: Emitter<R>>(target: &T, menu_id: &str) {
+fn emit_encoding_menu_event<R: Runtime>(app: &AppHandle<R>, menu_id: &str) {
     // Menu handlers emit frontend events instead of invoking JS directly, which
     // keeps Rust platform routing separate from Vue workflow logic.
     match menu_id {
         ENCODING_READ_JSON_MENU_ID => {
-            let _ = target.emit("encoding-read-json", ());
+            let _ = app.emit_to("encoding", "encoding-read-json", ());
         }
         ENCODING_SAVE_JSON_MENU_ID => {
-            let _ = target.emit("encoding-save-json", ());
+            let _ = app.emit_to("encoding", "encoding-save-json", ());
         }
         ENCODING_SAVE_JSON_AS_MENU_ID => {
-            let _ = target.emit("encoding-save-json-as", ());
+            let _ = app.emit_to("encoding", "encoding-save-json-as", ());
         }
         ENCODING_IMPORT_MENU_ID => {
-            let _ = target.emit("encoding-import", ());
+            let _ = app.emit_to("encoding", "encoding-import", ());
         }
         ENCODING_IMPORT_EXCEL_MENU_ID => {
-            let _ = target.emit("encoding-import-excel", ());
+            let _ = app.emit_to("encoding", "encoding-import-excel", ());
         }
         ENCODING_EXPORT_MENU_ID => {
-            let _ = target.emit("encoding-export", ());
+            let _ = app.emit_to("encoding", "encoding-export", ());
         }
         ENCODING_EXPORT_EXCEL_MENU_ID => {
-            let _ = target.emit("encoding-export-excel", ());
+            let _ = app.emit_to("encoding", "encoding-export-excel", ());
         }
         ENCODING_GO_TO_ROW_MENU_ID => {
-            let _ = target.emit("encoding-open-go-to-row", ());
+            let _ = app.emit_to("encoding", "encoding-open-go-to-row", ());
         }
         ENCODING_CLEAR_LIST_MENU_ID => {
-            let _ = target.emit("encoding-clear-list", ());
+            let _ = app.emit_to("encoding", "encoding-clear-list", ());
         }
         ENCODING_DELETE_SELECTED_MENU_ID => {
-            let _ = target.emit("encoding-delete-selected", ());
+            let _ = app.emit_to("encoding", "encoding-delete-selected", ());
         }
         ENCODING_UNMAPPED_CHARACTERS_MENU_ID => {
-            let _ = target.emit("encoding-open-unmapped-characters", ());
+            let _ = app.emit_to("encoding", "encoding-open-unmapped-characters", ());
         }
         ENCODING_UNUSED_ENCODINGS_MENU_ID => {
-            let _ = target.emit("encoding-open-unused-encodings", ());
+            let _ = app.emit_to("encoding", "encoding-open-unused-encodings", ());
         }
         ENCODING_LINE_LENGTH_MENU_ID => {
-            let _ = target.emit("encoding-open-line-length", ());
+            let _ = app.emit_to("encoding", "encoding-open-line-length", ());
         }
         OPEN_LANGUAGE_DIALOG_MENU_ID => {
-            let _ = target.emit("open-encoding-language-dialog", ());
+            let _ = app.emit_to("encoding", "open-encoding-language-dialog", ());
         }
         LANGUAGE_EN_MENU_ID => {
-            let _ = target.emit(
+            let _ = app.emit_to(
+                "encoding",
                 "set-language",
                 serde_json::json!({ "target": "encoding", "language": "en" }),
             );
         }
         LANGUAGE_ZH_HANS_MENU_ID => {
-            let _ = target.emit(
+            let _ = app.emit_to(
+                "encoding",
                 "set-language",
                 serde_json::json!({ "target": "encoding", "language": "zh-Hans" }),
             );
@@ -1229,73 +1239,75 @@ fn emit_encoding_menu_event<R: Runtime, T: Emitter<R>>(target: &T, menu_id: &str
     }
 }
 
-fn emit_main_menu_event<R: Runtime, T: Emitter<R>>(_app: &AppHandle<R>, target: &T, menu_id: &str) {
+fn emit_main_menu_event<R: Runtime>(app: &AppHandle<R>, menu_id: &str) {
     match menu_id {
         GO_TO_ROW_MENU_ID => {
-            let _ = target.emit("open-go-to-row", ());
+            let _ = app.emit_to("main", "open-go-to-row", ());
         }
         OPEN_ENCODING_MANAGER_MENU_ID => {
-            let _ = target.emit("open-encoding-manager", ());
+            let _ = app.emit_to("main", "open-encoding-manager", ());
         }
         LLM_SERVER_SETTINGS_MENU_ID => {
-            let _ = target.emit("open-llm-settings", ());
+            let _ = app.emit_to("main", "open-llm-settings", ());
         }
         AI_TRANSLATION_MENU_ID => {
-            let _ = target.emit("open-ai-translation", ());
+            let _ = app.emit_to("main", "open-ai-translation", ());
         }
         READ_JSON_MENU_ID => {
-            let _ = target.emit("read-json", ());
+            let _ = app.emit_to("main", "read-json", ());
         }
         SAVE_JSON_MENU_ID => {
-            let _ = target.emit("save-json", ());
+            let _ = app.emit_to("main", "save-json", ());
         }
         SAVE_JSON_AS_MENU_ID => {
-            let _ = target.emit("save-json-as", ());
+            let _ = app.emit_to("main", "save-json-as", ());
         }
         IMPORT_EXCEL_MENU_ID => {
-            let _ = target.emit("import-excel", ());
+            let _ = app.emit_to("main", "import-excel", ());
         }
         EXPORT_EXCEL_MENU_ID => {
-            let _ = target.emit("export-excel", ());
+            let _ = app.emit_to("main", "export-excel", ());
         }
         IMPORT_SRT_MENU_ID => {
-            let _ = target.emit("import-srt", ());
+            let _ = app.emit_to("main", "import-srt", ());
         }
         EXPORT_SRT_MENU_ID => {
-            let _ = target.emit("export-srt", ());
+            let _ = app.emit_to("main", "export-srt", ());
         }
         OPEN_LANGUAGE_DIALOG_MENU_ID => {
-            let _ = target.emit("open-main-language-dialog", ());
+            let _ = app.emit_to("main", "open-main-language-dialog", ());
         }
         LANGUAGE_EN_MENU_ID => {
-            let _ = target.emit(
+            let _ = app.emit_to(
+                "main",
                 "set-language",
                 serde_json::json!({ "target": "main", "language": "en" }),
             );
         }
         LANGUAGE_ZH_HANS_MENU_ID => {
-            let _ = target.emit(
+            let _ = app.emit_to(
+                "main",
                 "set-language",
                 serde_json::json!({ "target": "main", "language": "zh-Hans" }),
             );
         }
         UNDO_TABLE_CHANGE_MENU_ID => {
-            let _ = target.emit("undo-table-change", ());
+            let _ = app.emit_to("main", "undo-table-change", ());
         }
         REDO_TABLE_CHANGE_MENU_ID => {
-            let _ = target.emit("redo-table-change", ());
+            let _ = app.emit_to("main", "redo-table-change", ());
         }
         CLEAR_LIST_MENU_ID => {
-            let _ = target.emit("clear-list", ());
+            let _ = app.emit_to("main", "clear-list", ());
         }
         DELETE_SELECTED_MENU_ID => {
-            let _ = target.emit("delete-selected", ());
+            let _ = app.emit_to("main", "delete-selected", ());
         }
         BULK_CHANGE_STATE_MENU_ID => {
-            let _ = target.emit("bulk-change-state", ());
+            let _ = app.emit_to("main", "bulk-change-state", ());
         }
         CHARACTER_STATS_MENU_ID => {
-            let _ = target.emit("open-character-stats", ());
+            let _ = app.emit_to("main", "open-character-stats", ());
         }
         _ => {}
     }
@@ -1343,13 +1355,6 @@ fn open_encoding_manager<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
         });
     }
 
-    #[cfg(target_os = "macos")]
-    {
-        _window.on_menu_event(|window, event| {
-            emit_encoding_menu_event(window, event.id().as_ref());
-        });
-    }
-
     Ok(())
 }
 
@@ -1372,10 +1377,13 @@ pub fn run() {
                     window.set_menu(build_main_menu(app.handle())?)?;
                 }
 
-                let menu_app_handle = app.handle().clone();
-                window.on_menu_event(move |window, event| {
-                    emit_main_menu_event(&menu_app_handle, window, event.id().as_ref());
-                });
+                #[cfg(not(target_os = "macos"))]
+                {
+                    let menu_app_handle = app.handle().clone();
+                    window.on_menu_event(move |_window, event| {
+                        emit_main_menu_event(&menu_app_handle, event.id().as_ref());
+                    });
+                }
 
                 let app_handle = app.handle().clone();
                 window.on_window_event(move |event| match event {
@@ -1419,11 +1427,11 @@ pub fn run() {
                             | OPEN_LANGUAGE_DIALOG_MENU_ID
                             | LANGUAGE_EN_MENU_ID
                             | LANGUAGE_ZH_HANS_MENU_ID => {
-                                emit_encoding_menu_event(&window, event.id().as_ref());
+                                emit_encoding_menu_event(app, event.id().as_ref());
                                 return;
                             }
                             GO_TO_ROW_MENU_ID => {
-                                let _ = window.emit("encoding-open-go-to-row", ());
+                                let _ = app.emit_to("encoding", "encoding-open-go-to-row", ());
                                 return;
                             }
                             _ => {}
@@ -1431,8 +1439,8 @@ pub fn run() {
                     }
                 }
 
-                if let Some(window) = app.get_webview_window("main") {
-                    emit_main_menu_event(app, &window, event.id().as_ref());
+                if app.get_webview_window("main").is_some() {
+                    emit_main_menu_event(app, event.id().as_ref());
                 }
             }
         })

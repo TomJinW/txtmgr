@@ -262,7 +262,6 @@ const appShellClasses = computed(() => [
   `theme-${themeMode.value}`,
   { "platform-linux": isLinuxPlatform() },
 ]);
-const showsInWindowMenu = computed(() => !isMacPlatform());
 
 const gridTemplateColumns = computed(() =>
   [
@@ -2708,52 +2707,6 @@ function refreshDefaultCheckMessages() {
 
 <template>
   <main class="encoding-shell" :class="appShellClasses">
-    <nav v-if="showsInWindowMenu" class="encoding-window-menu" aria-label="Encoding menu">
-      <details>
-        <summary>{{ t("menu.file") }}</summary>
-        <div class="encoding-window-menu-panel">
-          <button type="button" @click="openJsonFile">{{ t("encoding.readJson") }}</button>
-          <button type="button" :disabled="!canSaveJson" @click="saveJsonFile">
-            {{ t("encoding.saveJson") }}
-          </button>
-          <button type="button" @click="saveJsonFileAs">{{ t("main.saveJsonAs") }}</button>
-          <button type="button" @click="openImportDialog">{{ t("encoding.importTbl") }}</button>
-          <button type="button" @click="openExportDialog">{{ t("encoding.exportTbl") }}</button>
-          <button type="button" @click="openExcelImportDialog">{{ t("encoding.importExcel") }}</button>
-          <button type="button" @click="openExcelExportDialog">{{ t("encoding.exportExcel") }}</button>
-        </div>
-      </details>
-
-      <details>
-        <summary>{{ t("menu.tools") }}</summary>
-        <div class="encoding-window-menu-panel">
-          <button type="button" @click="openGoToRowDialog">{{ t("main.goToRow") }}</button>
-          <button type="button" @click="openLanguageDialog">{{ t("app.language") }}</button>
-          <button type="button" :disabled="rows.length === 0" @click="clearRows">
-            {{ t("main.clearList") }}
-          </button>
-          <button type="button" :disabled="selectedRowCount === 0" @click="deleteSelectedRows">
-            {{ t("main.deleteSelected") }}
-          </button>
-        </div>
-      </details>
-
-      <details>
-        <summary>{{ t("menu.statistics") }}</summary>
-        <div class="encoding-window-menu-panel">
-          <button type="button" @click="openUnmappedCharactersDialog">
-            {{ t("stats.unmappedCharacters") }}
-          </button>
-          <button type="button" @click="openUnusedEncodingsDialog">
-            {{ t("stats.unusedEncodings") }}
-          </button>
-          <button type="button" @click="openLineLengthDialog">
-            {{ t("lineLength.title") }}
-          </button>
-        </div>
-      </details>
-    </nav>
-
     <section class="encoding-top-panel">
       <header class="encoding-toolbar">
         <div class="encoding-toolbar-controls">
@@ -3301,77 +3254,6 @@ button {
   padding: 10px;
   color: var(--text);
   background: var(--page-bg);
-}
-
-.encoding-window-menu {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  min-height: 28px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 2px 4px;
-  background: var(--panel-bg);
-}
-
-.encoding-window-menu details {
-  position: relative;
-}
-
-.encoding-window-menu summary {
-  min-width: 54px;
-  border-radius: 4px;
-  padding: 4px 8px;
-  color: var(--text);
-  font-size: 12px;
-  line-height: 1.25;
-  list-style: none;
-  cursor: pointer;
-  user-select: none;
-}
-
-.encoding-window-menu summary::-webkit-details-marker {
-  display: none;
-}
-
-.encoding-window-menu details[open] summary,
-.encoding-window-menu summary:hover {
-  background: var(--control-hover-bg);
-}
-
-.encoding-window-menu-panel {
-  position: absolute;
-  top: calc(100% + 4px);
-  left: 0;
-  z-index: 20;
-  display: grid;
-  min-width: 190px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 4px;
-  background: var(--panel-bg);
-  box-shadow: 0 12px 30px rgb(15 23 42 / 18%);
-}
-
-.encoding-window-menu-panel button {
-  min-height: 28px;
-  border: 0;
-  border-radius: 4px;
-  padding: 5px 8px;
-  color: var(--text);
-  background: transparent;
-  font-size: 12px;
-  text-align: left;
-}
-
-.encoding-window-menu-panel button:hover:not(:disabled) {
-  background: var(--control-hover-bg);
-}
-
-.encoding-window-menu-panel button:disabled {
-  color: var(--muted);
-  cursor: not-allowed;
-  opacity: 0.65;
 }
 
 .theme-dark {

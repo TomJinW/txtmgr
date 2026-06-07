@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "txtmgr",
+        "title": "Translation Manager",
         "width": 1280,
         "height": 860,
         "minWidth": 1024,
