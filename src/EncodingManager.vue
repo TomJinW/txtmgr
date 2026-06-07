@@ -255,6 +255,8 @@ const rowElements = new Map<number, HTMLElement>();
 const rowIdentities = new WeakMap<EncodingRow, number>();
 const appWindow = getCurrentWindow();
 const tableEndSpacerWidth = 24;
+let filterCountRefreshFrame: number | undefined;
+let filterCountRefreshRun = 0;
 
 const appShellClasses = computed(() => [
   `theme-${themeMode.value}`,
@@ -371,17 +373,7 @@ const textFilteredRows = computed(() => {
     .filter(({ row }) => rowMatchesSearch(row, query));
 });
 
-const filterCounts = computed(() => {
-  const counts = {} as Record<EncodingFilter, number>;
-
-  for (const filter of filterOptions) {
-    counts[filter] = textFilteredRows.value.filter(({ row }) =>
-      rowMatchesFilter(row, filter),
-    ).length;
-  }
-
-  return counts;
-});
+const filterCounts = ref(emptyEncodingFilterCounts());
 
 const filteredRowIds = computed(() =>
   filteredRows.value.map(({ row }) => getRowIdentity(row)),
@@ -453,6 +445,7 @@ watch(
   rows,
   () => {
     queuePersistRows();
+    queueRefreshFilterCounts();
     pruneSelectedRows();
   },
   { deep: true },
@@ -520,6 +513,7 @@ watch(
     if (tableWrap.value) {
       tableWrap.value.scrollTop = 0;
     }
+    queueRefreshFilterCounts();
     await nextTick();
     updateTableViewport();
   },
@@ -546,6 +540,9 @@ window.addEventListener("keydown", handleWindowsMenuShortcut);
 onBeforeUnmount(() => {
   window.clearTimeout(autoSaveTimer);
   window.clearTimeout(columnWidthSaveTimer);
+  if (filterCountRefreshFrame !== undefined) {
+    window.cancelAnimationFrame(filterCountRefreshFrame);
+  }
   unlistenEncodingReadJson?.();
   unlistenEncodingSaveJson?.();
   unlistenEncodingSaveJsonAs?.();
@@ -2437,7 +2434,7 @@ async function restoreEncodingDraft() {
         : [];
 
     jsonPath.value = isRecord(parsed) ? toText(parsed.jsonPath) : "";
-    rows.value = rowSource.map(normalizeEncodingJsonRow);
+    rows.value = await normalizeEncodingRowsInChunks(rowSource);
     statusMessage.value = t("message.restoredLocalDraft");
     if (!backendDraft && legacyDraft) {
       // Migrate older localStorage drafts into Tauri app data after restore.
@@ -2448,6 +2445,17 @@ async function restoreEncodingDraft() {
     window.localStorage.removeItem(draftStorageKey);
     invoke("delete_app_draft", { name: "encoding" }).catch(() => {});
   }
+}
+
+async function normalizeEncodingRowsInChunks(rowSource: unknown[]) {
+  const normalizedRows: EncodingRow[] = [];
+  for (let index = 0; index < rowSource.length; index += 1) {
+    normalizedRows.push(normalizeEncodingJsonRow(rowSource[index]));
+    if (index % 1000 === 999) {
+      await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
+    }
+  }
+  return normalizedRows;
 }
 
 function restoreColumnWidths() {
@@ -2581,6 +2589,46 @@ function encodingFilterLabel(filter: EncodingFilter) {
     special: t("encoding.special"),
   };
   return labels[filter];
+}
+
+function emptyEncodingFilterCounts() {
+  return Object.fromEntries(filterOptions.map((filter) => [filter, 0])) as Record<
+    EncodingFilter,
+    number
+  >;
+}
+
+function queueRefreshFilterCounts() {
+  if (filterCountRefreshFrame !== undefined) {
+    window.cancelAnimationFrame(filterCountRefreshFrame);
+  }
+  filterCountRefreshRun += 1;
+  const runId = filterCountRefreshRun;
+
+  filterCountRefreshFrame = window.requestAnimationFrame(() => {
+    filterCountRefreshFrame = undefined;
+    void refreshFilterCounts(runId);
+  });
+}
+
+async function refreshFilterCounts(runId: number) {
+  const counts = emptyEncodingFilterCounts();
+  const baseRows = textFilteredRows.value;
+  for (let index = 0; index < baseRows.length; index += 1) {
+    if (runId !== filterCountRefreshRun) return;
+    const { row } = baseRows[index];
+    for (const filter of filterOptions) {
+      if (rowMatchesFilter(row, filter)) {
+        counts[filter] += 1;
+      }
+    }
+    if (index % 500 === 499) {
+      filterCounts.value = { ...counts };
+      await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
+    }
+  }
+  if (runId !== filterCountRefreshRun) return;
+  filterCounts.value = counts;
 }
 
 function rowNumberStyle() {

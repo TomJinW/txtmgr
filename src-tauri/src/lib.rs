@@ -610,14 +610,9 @@ fn set_app_language_menu(app: AppHandle, language: String) -> Result<(), String>
     #[cfg(not(target_os = "macos"))]
     {
         if encoding_is_focused {
-            #[cfg(target_os = "windows")]
-            {
-                if let Some(window) = app.get_webview_window("encoding") {
-                    let menu = build_encoding_menu_for(&app, language)
-                        .map_err(|error| error.to_string())?;
-                    window.set_menu(menu).map_err(|error| error.to_string())?;
-                }
-            }
+            // Non-macOS auxiliary window menus have been unstable in WebView
+            // shells. Encoding Manager uses in-window buttons plus frontend
+            // shortcut fallback instead.
         } else if let Some(window) = app.get_webview_window("main") {
             let menu = build_main_menu_for(&app, language).map_err(|error| error.to_string())?;
             window.set_menu(menu).map_err(|error| error.to_string())?;
@@ -1153,13 +1148,13 @@ fn emit_encoding_menu_event<R: Runtime, T: Emitter<R>>(target: &T, menu_id: &str
     }
 }
 
-fn emit_main_menu_event<R: Runtime, T: Emitter<R>>(app: &AppHandle<R>, target: &T, menu_id: &str) {
+fn emit_main_menu_event<R: Runtime, T: Emitter<R>>(_app: &AppHandle<R>, target: &T, menu_id: &str) {
     match menu_id {
         GO_TO_ROW_MENU_ID => {
             let _ = target.emit("open-go-to-row", ());
         }
         OPEN_ENCODING_MANAGER_MENU_ID => {
-            let _ = open_encoding_manager(app);
+            let _ = target.emit("open-encoding-manager", ());
         }
         LLM_SERVER_SETTINGS_MENU_ID => {
             let _ = target.emit("open-llm-settings", ());
@@ -1236,16 +1231,11 @@ fn open_encoding_manager<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     .inner_size(760.0, 860.0)
     .build()?;
 
-    #[cfg(target_os = "windows")]
+    #[cfg(not(target_os = "macos"))]
     {
-        window.set_menu(build_encoding_menu(app)?)?;
-    }
-
-    #[cfg(target_os = "linux")]
-    {
-        // Linux native window menus are inconsistent across desktop shells and
-        // have caused the auxiliary window to hang on open. The Encoding UI and
-        // frontend shortcut fallback remain available without attaching a menu.
+        // Native menus on auxiliary WebView windows have caused full-app hangs
+        // outside macOS. Keep Encoding Manager menu actions available through
+        // toolbar buttons and the frontend shortcut fallback.
     }
 
     #[cfg(target_os = "macos")]

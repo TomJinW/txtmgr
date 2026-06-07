@@ -4,6 +4,7 @@ import { confirm, open as openDialog, save } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { readFile, writeFile, writeTextFile } from "@tauri-apps/plugin-fs";
 import AiTranslationDialog, {
   type AiTranslationScope,
@@ -200,6 +201,7 @@ let unlistenImportSrt: UnlistenFn | undefined;
 let unlistenExportSrt: UnlistenFn | undefined;
 let unlistenSetLanguage: UnlistenFn | undefined;
 let unlistenOpenLanguageDialog: UnlistenFn | undefined;
+let unlistenOpenEncodingManager: UnlistenFn | undefined;
 let unlistenOpenCharacterStats: UnlistenFn | undefined;
 let unlistenOpenLlmSettings: UnlistenFn | undefined;
 let unlistenOpenAiTranslation: UnlistenFn | undefined;
@@ -538,6 +540,7 @@ onBeforeUnmount(() => {
   unlistenExportSrt?.();
   unlistenSetLanguage?.();
   unlistenOpenLanguageDialog?.();
+  unlistenOpenEncodingManager?.();
   unlistenOpenCharacterStats?.();
   unlistenOpenLlmSettings?.();
   unlistenOpenAiTranslation?.();
@@ -586,6 +589,42 @@ function resetAiTranslationModeKey() {
   isAiTranslationFakeMode.value = false;
 }
 
+async function openEncodingManagerWindow() {
+  try {
+    if (!isLinuxPlatform() && !isWindowsPlatform()) {
+      await invoke("open_encoding_manager_window");
+      return;
+    }
+
+    const existingWindow = await WebviewWindow.getByLabel("encoding");
+    if (existingWindow) {
+      await existingWindow.setFocus();
+      return;
+    }
+
+    const encodingWindow = new WebviewWindow("encoding", {
+      title: "Encoding Manager",
+      url: "index.html#/encoding",
+      width: 760,
+      height: 860,
+      center: true,
+      focus: true,
+      visible: true,
+    });
+
+    encodingWindow.once("tauri://error", (event) => {
+      const message = String(event.payload ?? "Failed to open Encoding Manager.");
+      errorMessage.value = message;
+      statusMessage.value = "";
+      console.warn("Failed to open Encoding Manager.", event.payload);
+    });
+  } catch (error) {
+    errorMessage.value = formatError(error, "Failed to open Encoding Manager.");
+    statusMessage.value = "";
+    console.warn("Failed to open Encoding Manager.", error);
+  }
+}
+
 function handleWindowsMenuShortcut(event: KeyboardEvent) {
   if (!isWindowsPlatform()) return;
 
@@ -602,9 +641,7 @@ function handleWindowsMenuShortcut(event: KeyboardEvent) {
     {
       action: "open_encoding_manager",
       run: () => {
-        invoke("open_encoding_manager_window").catch((error) => {
-          console.warn("Failed to open Encoding Manager.", error);
-        });
+        void openEncodingManagerWindow();
       },
     },
     { action: "llm_server_settings", run: () => openLlmSettingsDialog() },
@@ -723,6 +760,16 @@ function registerMenuListeners() {
     })
     .catch((error) => {
       console.warn("Failed to register open language dialog menu listener.", error);
+    });
+
+  listen("open-encoding-manager", () => {
+    void openEncodingManagerWindow();
+  })
+    .then((unlisten) => {
+      unlistenOpenEncodingManager = unlisten;
+    })
+    .catch((error) => {
+      console.warn("Failed to register open Encoding Manager menu listener.", error);
     });
 
   listen("open-character-stats", () => {
