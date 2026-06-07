@@ -1139,7 +1139,10 @@ fn emit_encoding_menu_event<R: Runtime, T: Emitter<R>>(target: &T, menu_id: &str
             let _ = target.emit("encoding-open-line-length", ());
         }
         OPEN_LANGUAGE_DIALOG_MENU_ID => {
-            let _ = target.emit("open-language-dialog", ());
+            let _ = target.emit(
+                "open-language-dialog",
+                serde_json::json!({ "target": "encoding" }),
+            );
         }
         LANGUAGE_EN_MENU_ID => {
             let _ = target.emit("set-language", serde_json::json!({ "language": "en" }));
@@ -1187,7 +1190,10 @@ fn emit_main_menu_event<R: Runtime, T: Emitter<R>>(_app: &AppHandle<R>, target: 
             let _ = target.emit("export-srt", ());
         }
         OPEN_LANGUAGE_DIALOG_MENU_ID => {
-            let _ = target.emit("open-language-dialog", ());
+            let _ = target.emit(
+                "open-language-dialog",
+                serde_json::json!({ "target": "main" }),
+            );
         }
         LANGUAGE_EN_MENU_ID => {
             let _ = target.emit("set-language", serde_json::json!({ "language": "en" }));

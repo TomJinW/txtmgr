@@ -31,6 +31,9 @@ type TranslationKey =
   | "common.searchText"
   | "common.selected"
   | "common.theme"
+  | "menu.file"
+  | "menu.tools"
+  | "menu.statistics"
   | "theme.light"
   | "theme.dark"
   | "match.contains"
@@ -389,6 +392,9 @@ const translations: Record<AppLanguage, Record<TranslationKey, string>> = {
     "common.searchText": "Search text...",
     "common.selected": "Selected",
     "common.theme": "Theme",
+    "menu.file": "File",
+    "menu.tools": "Tools",
+    "menu.statistics": "Statistics",
     "theme.light": "Light",
     "theme.dark": "Dark",
     "match.contains": "Contains",
@@ -746,6 +752,9 @@ const translations: Record<AppLanguage, Record<TranslationKey, string>> = {
     "common.searchText": "搜索文本...",
     "common.selected": "已选择",
     "common.theme": "主题",
+    "menu.file": "文件",
+    "menu.tools": "工具",
+    "menu.statistics": "统计",
     "theme.light": "浅色",
     "theme.dark": "深色",
     "match.contains": "包含",
