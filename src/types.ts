@@ -55,7 +55,7 @@ export type TextSearchKey =
   | "note"
   | "file_name";
 
-export type ThemeMode = "light" | "dark";
+export type ThemeMode = "system" | "light" | "dark";
 export type TextMatchMode = "contains" | "exact";
 export type CjkFallbackMode = "default" | "sc" | "tc" | "jp" | "kr";
 export type CjkFallbackColumn = "original" | "translated" | "note";

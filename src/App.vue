@@ -3,6 +3,7 @@ import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import { confirm, open as openDialog, save } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { setTheme as setAppTheme } from "@tauri-apps/api/app";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { readFile, writeFile, writeTextFile } from "@tauri-apps/plugin-fs";
@@ -217,6 +218,8 @@ const rowElements = new Map<number, HTMLElement>();
 // selection/filter bookkeeping stable without mutating imported row data.
 const rowIdentities = new WeakMap<SentenceRow, number>();
 const appWindow = getCurrentWindow();
+const systemThemeQuery = window.matchMedia("(prefers-color-scheme: dark)");
+const systemThemeMode = ref<"light" | "dark">(getSystemThemeMode());
 const tableEndSpacerWidth = 24;
 
 const gridTemplateColumns = computed(() =>
@@ -226,8 +229,12 @@ const gridTemplateColumns = computed(() =>
   ].join(" "),
 );
 
+const effectiveThemeMode = computed<"light" | "dark">(() =>
+  themeMode.value === "system" ? systemThemeMode.value : themeMode.value,
+);
+
 const appShellClasses = computed(() => [
-  `theme-${themeMode.value}`,
+  `theme-${effectiveThemeMode.value}`,
   { "platform-linux": isLinuxPlatform() },
 ]);
 
@@ -413,14 +420,14 @@ const renderedRows = computed(() =>
 // Draft restore is async because table contents now live in Tauri app data.
 // Watchers below will re-save the restored data if it came from legacy storage.
 void restoreDraft();
-syncWindowTheme();
 registerMenuListeners();
-syncAppLanguageMenu();
+void syncNativeChrome();
 window.addEventListener("focus", handleWindowFocus);
 window.addEventListener("keydown", handleWindowsMenuShortcut);
 window.addEventListener("keydown", handleAiTranslationModeKey);
 window.addEventListener("keyup", handleAiTranslationModeKey);
 window.addEventListener("blur", resetAiTranslationModeKey);
+systemThemeQuery.addEventListener("change", handleSystemThemeChange);
 
 watch(
   () => ({ fileName: fileName.value, jsonPath: jsonPath.value, rows: rows.value }),
@@ -450,7 +457,7 @@ watch(
 
 watch(themeMode, () => {
   persistThemeMode();
-  syncWindowTheme();
+  void syncNativeChrome();
 });
 
 watch(currentLanguage, () => {
@@ -551,6 +558,7 @@ onBeforeUnmount(() => {
   window.removeEventListener("focus", handleWindowFocus);
   window.removeEventListener("keydown", handleWindowsMenuShortcut);
   window.removeEventListener("keydown", handleAiTranslationModeKey);
+  systemThemeQuery.removeEventListener("change", handleSystemThemeChange);
   window.removeEventListener("keyup", handleAiTranslationModeKey);
   window.removeEventListener("blur", resetAiTranslationModeKey);
 });
@@ -3266,17 +3274,42 @@ function persistThemeMode() {
   window.localStorage.setItem(themeStorageKey, themeMode.value);
 }
 
-function syncWindowTheme() {
-  appWindow.setTheme(themeMode.value).catch((error) => {
+async function syncWindowTheme() {
+  try {
+    const nativeTheme = themeMode.value === "system" ? null : themeMode.value;
+    await setAppTheme(nativeTheme);
+    await appWindow.setTheme(nativeTheme);
+  } catch (error) {
     console.warn("Failed to sync native window theme.", error);
     // The web theme still works if native titlebar theming is unavailable.
+  }
+}
+
+function getSystemThemeMode(): "light" | "dark" {
+  return systemThemeQuery.matches ? "dark" : "light";
+}
+
+function handleSystemThemeChange() {
+  systemThemeMode.value = getSystemThemeMode();
+  if (themeMode.value === "system") {
+    void syncNativeChrome();
+  }
+}
+
+function syncAppLanguageMenu(forceRebuild = false) {
+  invoke("set_app_language_menu", {
+    language: currentLanguage.value,
+    forceRebuild,
+  }).catch((error) => {
+    console.warn("Failed to sync app language menu.", error);
   });
 }
 
-function syncAppLanguageMenu() {
-  invoke("set_app_language_menu", { language: currentLanguage.value }).catch((error) => {
-    console.warn("Failed to sync app language menu.", error);
-  });
+async function syncNativeChrome() {
+  // On Windows the native menu colors are captured when the menu is attached,
+  // so apply the window theme before rebuilding localized menus.
+  await syncWindowTheme();
+  syncAppLanguageMenu(true);
 }
 
 function syncHistoryMenuState() {
@@ -3434,10 +3467,9 @@ function nonNegativeIntegerOrNull(value: unknown) {
 
 function restoreThemeMode(): ThemeMode {
   const storedTheme = window.localStorage.getItem(themeStorageKey);
-  if (storedTheme === "dark" || storedTheme === "light") return storedTheme;
-  return window.matchMedia?.("(prefers-color-scheme: dark)").matches
-    ? "dark"
-    : "light";
+  return storedTheme === "system" || storedTheme === "dark" || storedTheme === "light"
+    ? storedTheme
+    : "system";
 }
 
 function queuePersistColumnWidths() {
@@ -3575,6 +3607,7 @@ function startResize(columnIndex: number, event: PointerEvent) {
         <div class="toolbar-actions">
           <div class="toolbar-controls">
             <select v-model="themeMode" class="theme-select" :aria-label="t('common.theme')">
+              <option value="system">{{ t("theme.system") }}</option>
               <option value="light">{{ t("theme.light") }}</option>
               <option value="dark">{{ t("theme.dark") }}</option>
             </select>
@@ -4543,7 +4576,7 @@ button {
 }
 
 .theme-select {
-  width: 72px;
+  width: 86px;
   min-height: 29px;
   border: 1px solid var(--control-border);
   border-radius: 6px;

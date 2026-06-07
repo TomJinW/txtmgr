@@ -602,12 +602,16 @@ fn set_app_language_menu(
     app: AppHandle,
     menu_state: State<NativeMenuStateStore>,
     language: String,
+    force_rebuild: Option<bool>,
 ) -> Result<(), String> {
     let encoding_is_focused = app
         .get_webview_window("encoding")
         .and_then(|window| window.is_focused().ok())
         .unwrap_or(false);
     let language = normalize_app_language(&language);
+    let force_rebuild = force_rebuild.unwrap_or(false);
+    #[cfg(target_os = "macos")]
+    let _ = force_rebuild;
     #[cfg(target_os = "macos")]
     let _ = &menu_state;
 
@@ -636,7 +640,7 @@ fn set_app_language_menu(
             let mut state = menu_state
                 .lock()
                 .map_err(|_| "Failed to lock native menu state.".to_string())?;
-            if state.main_language.as_deref() == Some(language) {
+            if !force_rebuild && state.main_language.as_deref() == Some(language) {
                 return Ok(());
             }
 
@@ -1111,11 +1115,15 @@ fn attach_encoding_manager_menu(
     app: AppHandle,
     menu_state: State<NativeMenuStateStore>,
     language: String,
+    force_rebuild: Option<bool>,
 ) -> Result<(), String> {
     let window = app
         .get_webview_window("encoding")
         .ok_or_else(|| "Encoding Manager window is not open.".to_string())?;
     let language = normalize_app_language(&language);
+    let force_rebuild = force_rebuild.unwrap_or(false);
+    #[cfg(target_os = "macos")]
+    let _ = force_rebuild;
     #[cfg(target_os = "macos")]
     {
         let _ = &menu_state;
@@ -1134,7 +1142,7 @@ fn attach_encoding_manager_menu(
             .lock()
             .map_err(|_| "Failed to lock native menu state.".to_string())?;
 
-        if state.encoding_language.as_deref() != Some(language) {
+        if force_rebuild || state.encoding_language.as_deref() != Some(language) {
             let menu =
                 build_encoding_menu_for(&app, language).map_err(|error| error.to_string())?;
             window.set_menu(menu).map_err(|error| error.to_string())?;

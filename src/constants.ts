@@ -38,6 +38,7 @@ export const stateOptions: StateValue[] = [
 ];
 
 export const themeOptions: { label: string; value: ThemeMode }[] = [
+  { label: "System", value: "system" },
   { label: "Light", value: "light" },
   { label: "Dark", value: "dark" },
 ];

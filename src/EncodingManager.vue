@@ -7,6 +7,7 @@ import {
 } from "@tauri-apps/plugin-dialog";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
+import { setTheme as setAppTheme } from "@tauri-apps/api/app";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { readFile, writeFile, writeTextFile } from "@tauri-apps/plugin-fs";
 import {
@@ -254,12 +255,18 @@ const rowElements = new Map<number, HTMLElement>();
 // edits without adding internal ids to user-exported JSON/TBL data.
 const rowIdentities = new WeakMap<EncodingRow, number>();
 const appWindow = getCurrentWindow();
+const systemThemeQuery = window.matchMedia("(prefers-color-scheme: dark)");
+const systemThemeMode = ref<"light" | "dark">(getSystemThemeMode());
 const tableEndSpacerWidth = 24;
 let filterCountRefreshFrame: number | undefined;
 let filterCountRefreshRun = 0;
 
+const effectiveThemeMode = computed<"light" | "dark">(() =>
+  themeMode.value === "system" ? systemThemeMode.value : themeMode.value,
+);
+
 const appShellClasses = computed(() => [
-  `theme-${themeMode.value}`,
+  `theme-${effectiveThemeMode.value}`,
   { "platform-linux": isLinuxPlatform() },
 ]);
 
@@ -483,7 +490,7 @@ watch(
 
 watch(themeMode, () => {
   window.localStorage.setItem(themeStorageKey, themeMode.value);
-  syncWindowTheme();
+  void syncNativeChrome();
 });
 
 watch(currentLanguage, () => {
@@ -531,13 +538,13 @@ watch(renderedRows, () => {
   });
 });
 
-syncWindowTheme();
 registerMenuListeners();
-syncAppLanguageMenu();
+void syncNativeChrome();
 if (isMacPlatform()) {
-  window.addEventListener("focus", syncAppLanguageMenu);
+  window.addEventListener("focus", handleWindowFocus);
 }
 window.addEventListener("keydown", handleWindowsMenuShortcut);
+systemThemeQuery.addEventListener("change", handleSystemThemeChange);
 
 onBeforeUnmount(() => {
   window.clearTimeout(autoSaveTimer);
@@ -561,12 +568,13 @@ onBeforeUnmount(() => {
   unlistenSetLanguage?.();
   unlistenOpenLanguageDialog?.();
   if (isMacPlatform()) {
-    window.removeEventListener("focus", syncAppLanguageMenu);
+    window.removeEventListener("focus", handleWindowFocus);
   }
   rowResizeObservers.forEach((observer) => observer.disconnect());
   rowResizeObservers.clear();
   rowElements.clear();
   window.removeEventListener("keydown", handleWindowsMenuShortcut);
+  systemThemeQuery.removeEventListener("change", handleSystemThemeChange);
 });
 
 function isWindowsPlatform() {
@@ -575,6 +583,10 @@ function isWindowsPlatform() {
 
 function isMacPlatform() {
   return /Macintosh|Mac OS X/i.test(window.navigator.userAgent);
+}
+
+function handleWindowFocus() {
+  syncAppLanguageMenu();
 }
 
 function handleWindowsMenuShortcut(event: KeyboardEvent) {
@@ -2554,10 +2566,9 @@ function normalizeFallbackMode(value: unknown): CjkFallbackMode {
 
 function restoreThemeMode(): ThemeMode {
   const storedTheme = window.localStorage.getItem(themeStorageKey);
-  if (storedTheme === "dark" || storedTheme === "light") return storedTheme;
-  return window.matchMedia?.("(prefers-color-scheme: dark)").matches
-    ? "dark"
-    : "light";
+  return storedTheme === "system" || storedTheme === "dark" || storedTheme === "light"
+    ? storedTheme
+    : "system";
 }
 
 function cjkFontFamily(mode: CjkFallbackMode) {
@@ -2678,17 +2689,37 @@ function isLinuxPlatform() {
   return /Linux/i.test(window.navigator.userAgent);
 }
 
-function syncWindowTheme() {
-  appWindow.setTheme(themeMode.value).catch((error) => {
+async function syncWindowTheme() {
+  try {
+    const nativeTheme = themeMode.value === "system" ? null : themeMode.value;
+    await setAppTheme(nativeTheme);
+    await appWindow.setTheme(nativeTheme);
+  } catch (error) {
     console.warn("Failed to sync native window theme.", error);
+  }
+}
+
+function getSystemThemeMode(): "light" | "dark" {
+  return systemThemeQuery.matches ? "dark" : "light";
+}
+
+function handleSystemThemeChange() {
+  systemThemeMode.value = getSystemThemeMode();
+  if (themeMode.value === "system") {
+    void syncNativeChrome();
+  }
+}
+
+function syncAppLanguageMenu(forceRebuild = false) {
+  const command = isMacPlatform() ? "set_app_language_menu" : "attach_encoding_manager_menu";
+  invoke(command, { language: currentLanguage.value, forceRebuild }).catch((error) => {
+    console.warn("Failed to sync app language menu.", error);
   });
 }
 
-function syncAppLanguageMenu() {
-  const command = isMacPlatform() ? "set_app_language_menu" : "attach_encoding_manager_menu";
-  invoke(command, { language: currentLanguage.value }).catch((error) => {
-    console.warn("Failed to sync app language menu.", error);
-  });
+async function syncNativeChrome() {
+  await syncWindowTheme();
+  syncAppLanguageMenu(true);
 }
 
 function refreshDefaultCheckMessages() {
@@ -2712,6 +2743,7 @@ function refreshDefaultCheckMessages() {
       <header class="encoding-toolbar">
         <div class="encoding-toolbar-controls">
           <select v-model="themeMode" class="theme-select" :aria-label="t('common.theme')">
+            <option value="system">{{ t("theme.system") }}</option>
             <option value="light">{{ t("theme.light") }}</option>
             <option value="dark">{{ t("theme.dark") }}</option>
           </select>

@@ -34,6 +34,7 @@ type TranslationKey =
   | "menu.file"
   | "menu.tools"
   | "menu.statistics"
+  | "theme.system"
   | "theme.light"
   | "theme.dark"
   | "match.contains"
@@ -395,6 +396,7 @@ const translations: Record<AppLanguage, Record<TranslationKey, string>> = {
     "menu.file": "File",
     "menu.tools": "Tools",
     "menu.statistics": "Statistics",
+    "theme.system": "System",
     "theme.light": "Light",
     "theme.dark": "Dark",
     "match.contains": "Contains",
@@ -755,6 +757,7 @@ const translations: Record<AppLanguage, Record<TranslationKey, string>> = {
     "menu.file": "文件",
     "menu.tools": "工具",
     "menu.statistics": "统计",
+    "theme.system": "跟随系统",
     "theme.light": "浅色",
     "theme.dark": "深色",
     "match.contains": "包含",
