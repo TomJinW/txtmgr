@@ -110,7 +110,15 @@ struct SentenceCoverageSource {
 }
 
 type SentenceCoverageStore = Mutex<SentenceCoverageSource>;
-type EncodingMenuEventState = Mutex<bool>;
+
+#[derive(Default)]
+struct NativeMenuState {
+    main_language: Option<String>,
+    encoding_language: Option<String>,
+    encoding_event_registered: bool,
+}
+
+type NativeMenuStateStore = Mutex<NativeMenuState>;
 
 // Table drafts are user document state, so they live in Tauri app data instead
 // of browser localStorage. The frontend still reads legacy localStorage once
@@ -586,7 +594,11 @@ fn set_history_menu_enabled(app: AppHandle, can_undo: bool, can_redo: bool) -> R
 }
 
 #[tauri::command]
-fn set_app_language_menu(app: AppHandle, language: String) -> Result<(), String> {
+fn set_app_language_menu(
+    app: AppHandle,
+    menu_state: State<NativeMenuStateStore>,
+    language: String,
+) -> Result<(), String> {
     let encoding_is_focused = app
         .get_webview_window("encoding")
         .and_then(|window| window.is_focused().ok())
@@ -615,8 +627,16 @@ fn set_app_language_menu(app: AppHandle, language: String) -> Result<(), String>
             // shells. Encoding Manager uses in-window buttons plus frontend
             // shortcut fallback instead.
         } else if let Some(window) = app.get_webview_window("main") {
+            let mut state = menu_state
+                .lock()
+                .map_err(|_| "Failed to lock native menu state.".to_string())?;
+            if state.main_language.as_deref() == Some(language) {
+                return Ok(());
+            }
+
             let menu = build_main_menu_for(&app, language).map_err(|error| error.to_string())?;
             window.set_menu(menu).map_err(|error| error.to_string())?;
+            state.main_language = Some(language.to_string());
         }
         return Ok(());
     }
@@ -1083,7 +1103,7 @@ fn open_encoding_manager_window(app: AppHandle) -> Result<(), String> {
 #[tauri::command]
 fn attach_encoding_manager_menu(
     app: AppHandle,
-    event_state: State<EncodingMenuEventState>,
+    menu_state: State<NativeMenuStateStore>,
     language: String,
 ) -> Result<(), String> {
     let window = app
@@ -1099,14 +1119,19 @@ fn attach_encoding_manager_menu(
 
     #[cfg(not(target_os = "macos"))]
     {
-        let menu = build_encoding_menu_for(&app, language).map_err(|error| error.to_string())?;
-        window.set_menu(menu).map_err(|error| error.to_string())?;
-
-        let mut is_registered = event_state
+        let mut state = menu_state
             .lock()
-            .map_err(|_| "Failed to lock Encoding Manager menu state.".to_string())?;
-        if !*is_registered {
-            *is_registered = true;
+            .map_err(|_| "Failed to lock native menu state.".to_string())?;
+
+        if state.encoding_language.as_deref() != Some(language) {
+            let menu =
+                build_encoding_menu_for(&app, language).map_err(|error| error.to_string())?;
+            window.set_menu(menu).map_err(|error| error.to_string())?;
+            state.encoding_language = Some(language.to_string());
+        }
+
+        if !state.encoding_event_registered {
+            state.encoding_event_registered = true;
 
             window.on_menu_event(|window, event| {
                 emit_encoding_menu_event(window, event.id().as_ref());
@@ -1115,10 +1140,10 @@ fn attach_encoding_manager_menu(
             let app_handle = app.clone();
             window.on_window_event(move |event| {
                 if matches!(event, WindowEvent::Destroyed) {
-                    if let Ok(mut is_registered) =
-                        app_handle.state::<EncodingMenuEventState>().lock()
+                    if let Ok(mut state) = app_handle.state::<NativeMenuStateStore>().lock()
                     {
-                        *is_registered = false;
+                        state.encoding_event_registered = false;
+                        state.encoding_language = None;
                     }
                 }
             });
@@ -1186,10 +1211,7 @@ fn emit_encoding_menu_event<R: Runtime, T: Emitter<R>>(target: &T, menu_id: &str
             let _ = target.emit("encoding-open-line-length", ());
         }
         OPEN_LANGUAGE_DIALOG_MENU_ID => {
-            let _ = target.emit(
-                "open-language-dialog",
-                serde_json::json!({ "target": "encoding" }),
-            );
+            let _ = target.emit("open-encoding-language-dialog", ());
         }
         LANGUAGE_EN_MENU_ID => {
             let _ = target.emit(
@@ -1243,10 +1265,7 @@ fn emit_main_menu_event<R: Runtime, T: Emitter<R>>(_app: &AppHandle<R>, target: 
             let _ = target.emit("export-srt", ());
         }
         OPEN_LANGUAGE_DIALOG_MENU_ID => {
-            let _ = target.emit(
-                "open-language-dialog",
-                serde_json::json!({ "target": "main" }),
-            );
+            let _ = target.emit("open-main-language-dialog", ());
         }
         LANGUAGE_EN_MENU_ID => {
             let _ = target.emit(
@@ -1344,7 +1363,7 @@ fn exit_from_main_window<R: Runtime>(app: &AppHandle<R>) {
 pub fn run() {
     tauri::Builder::default()
         .manage(SentenceCoverageStore::default())
-        .manage(EncodingMenuEventState::default())
+        .manage(NativeMenuStateStore::default())
         .menu(build_main_menu)
         .setup(|app| {
             if let Some(window) = app.get_webview_window("main") {

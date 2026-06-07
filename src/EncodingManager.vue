@@ -749,8 +749,7 @@ function registerMenuListeners() {
       console.warn("Failed to register language menu listener.", error);
     });
 
-  listen<{ target?: string }>("open-language-dialog", (event) => {
-    if (event.payload?.target !== "encoding") return;
+  listen("open-encoding-language-dialog", () => {
     openLanguageDialog();
   })
     .then((unlisten) => {

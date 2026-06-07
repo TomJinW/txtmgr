@@ -1111,3 +1111,9 @@ function restoreAppLanguage(): AppLanguage {
     return "en";
   }
 }
+
+window.addEventListener("storage", (event) => {
+  if (event.key === appLanguageStorageKey && event.newValue) {
+    currentLanguage.value = normalizeAppLanguage(event.newValue);
+  }
+});

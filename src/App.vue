@@ -76,7 +76,6 @@ import type {
   TextSearchKey,
   ThemeMode,
 } from "./types";
-
 const columnWidths = ref(restoreColumnWidths());
 const columnFontSizes = ref(restoreColumnFontSizes());
 const cjkFallbackPrefs = ref(restoreCjkFallbackPrefs());
@@ -753,8 +752,7 @@ function registerMenuListeners() {
       console.warn("Failed to register language menu listener.", error);
     });
 
-  listen<{ target?: string }>("open-language-dialog", (event) => {
-    if (event.payload?.target !== "main") return;
+  listen("open-main-language-dialog", () => {
     openLanguageDialog();
   })
     .then((unlisten) => {
