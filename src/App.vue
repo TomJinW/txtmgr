@@ -742,7 +742,8 @@ function registerMenuListeners() {
       console.warn("Failed to register export SRT menu listener.", error);
     });
 
-  listen<{ language: AppLanguage }>("set-language", (event) => {
+  listen<{ target?: string; language: AppLanguage }>("set-language", (event) => {
+    if (event.payload?.target !== "main") return;
     setAppLanguage(normalizeAppLanguage(event.payload?.language));
   })
     .then((unlisten) => {

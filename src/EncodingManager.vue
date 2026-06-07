@@ -535,7 +535,9 @@ watch(renderedRows, () => {
 syncWindowTheme();
 registerMenuListeners();
 syncAppLanguageMenu();
-window.addEventListener("focus", syncAppLanguageMenu);
+if (isMacPlatform()) {
+  window.addEventListener("focus", syncAppLanguageMenu);
+}
 window.addEventListener("keydown", handleWindowsMenuShortcut);
 
 onBeforeUnmount(() => {
@@ -559,7 +561,9 @@ onBeforeUnmount(() => {
   unlistenEncodingDeleteSelected?.();
   unlistenSetLanguage?.();
   unlistenOpenLanguageDialog?.();
-  window.removeEventListener("focus", syncAppLanguageMenu);
+  if (isMacPlatform()) {
+    window.removeEventListener("focus", syncAppLanguageMenu);
+  }
   rowResizeObservers.forEach((observer) => observer.disconnect());
   rowResizeObservers.clear();
   rowElements.clear();
@@ -734,7 +738,8 @@ function registerMenuListeners() {
       console.warn("Failed to register encoding line length menu listener.", error);
     });
 
-  listen<{ language: AppLanguage }>("set-language", (event) => {
+  listen<{ target?: string; language: AppLanguage }>("set-language", (event) => {
+    if (event.payload?.target !== "encoding") return;
     setAppLanguage(normalizeAppLanguage(event.payload?.language));
   })
     .then((unlisten) => {
@@ -2681,7 +2686,8 @@ function syncWindowTheme() {
 }
 
 function syncAppLanguageMenu() {
-  invoke("set_app_language_menu", { language: currentLanguage.value }).catch((error) => {
+  const command = isMacPlatform() ? "set_app_language_menu" : "attach_encoding_manager_menu";
+  invoke(command, { language: currentLanguage.value }).catch((error) => {
     console.warn("Failed to sync app language menu.", error);
   });
 }

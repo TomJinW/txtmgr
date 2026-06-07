@@ -110,6 +110,7 @@ struct SentenceCoverageSource {
 }
 
 type SentenceCoverageStore = Mutex<SentenceCoverageSource>;
+type EncodingMenuEventState = Mutex<bool>;
 
 // Table drafts are user document state, so they live in Tauri app data instead
 // of browser localStorage. The frontend still reads legacy localStorage once
@@ -820,7 +821,6 @@ fn build_main_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
     build_main_menu_for(app, "en")
 }
 
-#[cfg(target_os = "macos")]
 fn build_encoding_menu_for<R: Runtime>(
     app: &AppHandle<R>,
     language: &str,
@@ -1080,6 +1080,54 @@ fn open_encoding_manager_window(app: AppHandle) -> Result<(), String> {
     open_encoding_manager(&app).map_err(|error| error.to_string())
 }
 
+#[tauri::command]
+fn attach_encoding_manager_menu(
+    app: AppHandle,
+    event_state: State<EncodingMenuEventState>,
+    language: String,
+) -> Result<(), String> {
+    let window = app
+        .get_webview_window("encoding")
+        .ok_or_else(|| "Encoding Manager window is not open.".to_string())?;
+    let language = normalize_app_language(&language);
+
+    #[cfg(target_os = "macos")]
+    {
+        let menu = build_encoding_menu_for(&app, language).map_err(|error| error.to_string())?;
+        app.set_menu(menu).map_err(|error| error.to_string())?;
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        let menu = build_encoding_menu_for(&app, language).map_err(|error| error.to_string())?;
+        window.set_menu(menu).map_err(|error| error.to_string())?;
+
+        let mut is_registered = event_state
+            .lock()
+            .map_err(|_| "Failed to lock Encoding Manager menu state.".to_string())?;
+        if !*is_registered {
+            *is_registered = true;
+
+            window.on_menu_event(|window, event| {
+                emit_encoding_menu_event(window, event.id().as_ref());
+            });
+
+            let app_handle = app.clone();
+            window.on_window_event(move |event| {
+                if matches!(event, WindowEvent::Destroyed) {
+                    if let Ok(mut is_registered) =
+                        app_handle.state::<EncodingMenuEventState>().lock()
+                    {
+                        *is_registered = false;
+                    }
+                }
+            });
+        }
+    }
+
+    Ok(())
+}
+
 #[cfg(target_os = "macos")]
 fn set_main_menu<R: Runtime>(app: &AppHandle<R>) {
     if let Ok(menu) = build_main_menu(app) {
@@ -1094,7 +1142,6 @@ fn set_encoding_menu<R: Runtime>(app: &AppHandle<R>) {
     }
 }
 
-#[cfg(target_os = "macos")]
 fn emit_encoding_menu_event<R: Runtime, T: Emitter<R>>(target: &T, menu_id: &str) {
     // Menu handlers emit frontend events instead of invoking JS directly, which
     // keeps Rust platform routing separate from Vue workflow logic.
@@ -1145,10 +1192,16 @@ fn emit_encoding_menu_event<R: Runtime, T: Emitter<R>>(target: &T, menu_id: &str
             );
         }
         LANGUAGE_EN_MENU_ID => {
-            let _ = target.emit("set-language", serde_json::json!({ "language": "en" }));
+            let _ = target.emit(
+                "set-language",
+                serde_json::json!({ "target": "encoding", "language": "en" }),
+            );
         }
         LANGUAGE_ZH_HANS_MENU_ID => {
-            let _ = target.emit("set-language", serde_json::json!({ "language": "zh-Hans" }));
+            let _ = target.emit(
+                "set-language",
+                serde_json::json!({ "target": "encoding", "language": "zh-Hans" }),
+            );
         }
         _ => {}
     }
@@ -1196,10 +1249,16 @@ fn emit_main_menu_event<R: Runtime, T: Emitter<R>>(_app: &AppHandle<R>, target: 
             );
         }
         LANGUAGE_EN_MENU_ID => {
-            let _ = target.emit("set-language", serde_json::json!({ "language": "en" }));
+            let _ = target.emit(
+                "set-language",
+                serde_json::json!({ "target": "main", "language": "en" }),
+            );
         }
         LANGUAGE_ZH_HANS_MENU_ID => {
-            let _ = target.emit("set-language", serde_json::json!({ "language": "zh-Hans" }));
+            let _ = target.emit(
+                "set-language",
+                serde_json::json!({ "target": "main", "language": "zh-Hans" }),
+            );
         }
         UNDO_TABLE_CHANGE_MENU_ID => {
             let _ = target.emit("undo-table-change", ());
@@ -1231,7 +1290,7 @@ fn open_encoding_manager<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
         return Ok(());
     }
 
-    let window = WebviewWindowBuilder::new(
+    let _window = WebviewWindowBuilder::new(
         app,
         "encoding",
         WebviewUrl::App("index.html#/encoding".into()),
@@ -1251,7 +1310,7 @@ fn open_encoding_manager<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     {
         set_encoding_menu(app);
         let app_handle = app.clone();
-        window.on_window_event(move |event| match event {
+        _window.on_window_event(move |event| match event {
             WindowEvent::Focused(true) => {
                 // macOS menu bar follows the focused window.
                 set_encoding_menu(&app_handle);
@@ -1267,7 +1326,7 @@ fn open_encoding_manager<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
 
     #[cfg(target_os = "macos")]
     {
-        window.on_menu_event(|window, event| {
+        _window.on_menu_event(|window, event| {
             emit_encoding_menu_event(window, event.id().as_ref());
         });
     }
@@ -1285,6 +1344,7 @@ fn exit_from_main_window<R: Runtime>(app: &AppHandle<R>) {
 pub fn run() {
     tauri::Builder::default()
         .manage(SentenceCoverageStore::default())
+        .manage(EncodingMenuEventState::default())
         .menu(build_main_menu)
         .setup(|app| {
             if let Some(window) = app.get_webview_window("main") {
@@ -1362,6 +1422,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
             greet,
+            attach_encoding_manager_menu,
             delete_app_draft,
             delete_llm_api_key,
             get_sentence_coverage_source,
