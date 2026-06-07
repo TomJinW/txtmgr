@@ -1216,11 +1216,13 @@ async function translateWithAi() {
     if (llmSettings.value.baseUrl.trim() === "") {
       aiTranslationMessage.value = t("ai.baseUrlRequired");
       errorMessage.value = aiTranslationMessage.value;
+      statusMessage.value = "";
       return;
     }
     if (llmSettings.value.model.trim() === "") {
       aiTranslationMessage.value = t("ai.modelRequired");
       errorMessage.value = aiTranslationMessage.value;
+      statusMessage.value = "";
       return;
     }
   }
@@ -4244,6 +4246,7 @@ function startResize(columnIndex: number, event: PointerEvent) {
     <AiTranslationDialog
       v-if="isAiTranslationDialogOpen"
       :has-result="aiTranslationSession !== null"
+      :is-error="errorMessage !== '' && errorMessage === aiTranslationMessage"
       :is-fake-mode="isAiTranslationFakeMode"
       :is-translating="isPreparingAiTranslation"
       :message="aiTranslationMessage"

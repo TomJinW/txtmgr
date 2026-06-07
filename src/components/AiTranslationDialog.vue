@@ -17,6 +17,7 @@ export type AiTranslationSettings = {
 
 const props = defineProps<{
   hasResult: boolean;
+  isError: boolean;
   isFakeMode: boolean;
   isTranslating: boolean;
   message: string;
@@ -82,7 +83,9 @@ function handleDialogKeydown(event: KeyboardEvent) {
         <p>{{ t("ai.subtitle") }}</p>
       </header>
 
-      <p class="dialog-message">{{ message || t("common.ready") }}</p>
+      <p class="dialog-message" :class="{ error: isError }">
+        {{ message || t("common.ready") }}
+      </p>
 
       <section class="settings-section" aria-label="Translation range">
         <label>
@@ -264,6 +267,12 @@ function handleDialogKeydown(event: KeyboardEvent) {
   background: var(--info-bg);
   font-size: 12px;
   line-height: 1.25;
+}
+
+.dialog-message.error {
+  border-color: var(--danger);
+  color: var(--danger);
+  background: var(--danger-bg);
 }
 
 .settings-section {
