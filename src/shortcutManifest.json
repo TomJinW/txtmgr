@@ -10,6 +10,7 @@
   "export_excel": { "mac": "Cmd+Option+E", "other": "Ctrl+Alt+E" },
   "import_srt": { "mac": "Cmd+Option+I", "other": "Ctrl+Alt+I" },
   "export_srt": { "mac": "Cmd+Option+R", "other": "Ctrl+Alt+R" },
+  "open_language_dialog": { "mac": "Cmd+Option+K", "other": "Ctrl+Alt+K" },
   "language_en": { "mac": "Cmd+Option+1", "other": "Ctrl+Alt+1" },
   "language_zh_hans": { "mac": "Cmd+Option+2", "other": "Ctrl+Alt+2" },
   "character_stats": { "mac": "Cmd+Option+C", "other": "Ctrl+Alt+C" },

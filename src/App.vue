@@ -19,6 +19,7 @@ import CharacterStatsDialog from "./components/CharacterStatsDialog.vue";
 import ExcelExportDialog from "./components/ExcelExportDialog.vue";
 import ExcelImportDialog from "./components/ExcelImportDialog.vue";
 import GoToRowDialog from "./components/GoToRowDialog.vue";
+import LanguageDialog from "./components/LanguageDialog.vue";
 import LlmSettingsDialog, {
   type LlmServerSettings,
 } from "./components/LlmSettingsDialog.vue";
@@ -106,6 +107,7 @@ const isExcelExportDialogOpen = ref(false);
 const isSrtImportDialogOpen = ref(false);
 const isSrtExportDialogOpen = ref(false);
 const isLlmSettingsDialogOpen = ref(false);
+const isLanguageDialogOpen = ref(false);
 const isAiTranslationDialogOpen = ref(false);
 const isAiTranslationSessionDialogOpen = ref(false);
 const isBulkStateDialogOpen = ref(false);
@@ -197,6 +199,7 @@ let unlistenExportExcel: UnlistenFn | undefined;
 let unlistenImportSrt: UnlistenFn | undefined;
 let unlistenExportSrt: UnlistenFn | undefined;
 let unlistenSetLanguage: UnlistenFn | undefined;
+let unlistenOpenLanguageDialog: UnlistenFn | undefined;
 let unlistenOpenCharacterStats: UnlistenFn | undefined;
 let unlistenOpenLlmSettings: UnlistenFn | undefined;
 let unlistenOpenAiTranslation: UnlistenFn | undefined;
@@ -534,6 +537,7 @@ onBeforeUnmount(() => {
   unlistenImportSrt?.();
   unlistenExportSrt?.();
   unlistenSetLanguage?.();
+  unlistenOpenLanguageDialog?.();
   unlistenOpenCharacterStats?.();
   unlistenOpenLlmSettings?.();
   unlistenOpenAiTranslation?.();
@@ -594,6 +598,7 @@ function handleWindowsMenuShortcut(event: KeyboardEvent) {
     { action: "export_excel", run: () => void openExcelExportDialog() },
     { action: "import_srt", run: () => void openSrtImportDialog() },
     { action: "export_srt", run: () => void openSrtExportDialog() },
+    { action: "open_language_dialog", run: () => openLanguageDialog() },
     {
       action: "open_encoding_manager",
       run: () => {
@@ -710,6 +715,16 @@ function registerMenuListeners() {
       console.warn("Failed to register language menu listener.", error);
     });
 
+  listen("open-language-dialog", () => {
+    openLanguageDialog();
+  })
+    .then((unlisten) => {
+      unlistenOpenLanguageDialog = unlisten;
+    })
+    .catch((error) => {
+      console.warn("Failed to register open language dialog menu listener.", error);
+    });
+
   listen("open-character-stats", () => {
     openCharacterStatsDialog();
   })
@@ -799,6 +814,7 @@ type MainDialog =
   | "excelExport"
   | "excelImport"
   | "goToRow"
+  | "language"
   | "llmSettings"
   | "srtExport"
   | "srtImport";
@@ -843,6 +859,9 @@ function openMainDialog(dialog: MainDialog) {
     case "goToRow":
       isGoToRowDialogOpen.value = true;
       break;
+    case "language":
+      isLanguageDialogOpen.value = true;
+      break;
     case "llmSettings":
       isLlmSettingsDialogOpen.value = true;
       break;
@@ -867,6 +886,7 @@ function closeMainDialogs() {
   isSrtExportDialogOpen.value = false;
   isSrtImportDialogOpen.value = false;
   isGoToRowDialogOpen.value = false;
+  isLanguageDialogOpen.value = false;
   isLlmSettingsDialogOpen.value = false;
 }
 
@@ -884,6 +904,19 @@ function hasActiveMainDialogTask() {
 
 async function openGoToRowDialog() {
   openMainDialog("goToRow");
+}
+
+function openLanguageDialog() {
+  openMainDialog("language");
+}
+
+function closeLanguageDialog() {
+  isLanguageDialogOpen.value = false;
+}
+
+function selectLanguage(language: AppLanguage) {
+  setAppLanguage(language);
+  closeLanguageDialog();
 }
 
 async function openExcelExportDialog() {
@@ -4079,6 +4112,13 @@ function startResize(columnIndex: number, event: PointerEvent) {
       :max-row="rows.length"
       @close="closeGoToRowDialog"
       @confirm="confirmGoToRowDialog"
+    />
+
+    <LanguageDialog
+      v-if="isLanguageDialogOpen"
+      :current-language="currentLanguage"
+      @close="closeLanguageDialog"
+      @select="selectLanguage"
     />
 
     <CharacterStatsDialog

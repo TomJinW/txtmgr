@@ -41,6 +41,7 @@ import EncodingExcelExportDialog from "./components/EncodingExcelExportDialog.vu
 import EncodingExportDialog from "./components/EncodingExportDialog.vue";
 import EncodingImportDialog from "./components/EncodingImportDialog.vue";
 import GoToRowDialog from "./components/GoToRowDialog.vue";
+import LanguageDialog from "./components/LanguageDialog.vue";
 import type { CjkFallbackMode, EncodingRow, SentenceRow, StoredDraft, ThemeMode } from "./types";
 
 type EncodingFilter =
@@ -132,6 +133,7 @@ const isGoToRowDialogOpen = ref(false);
 const isUnmappedCharactersDialogOpen = ref(false);
 const isUnusedEncodingsDialogOpen = ref(false);
 const isLineLengthDialogOpen = ref(false);
+const isLanguageDialogOpen = ref(false);
 const isImportDialogOpen = ref(false);
 const isImportingText = ref(false);
 const isSavingJson = ref(false);
@@ -244,6 +246,7 @@ let unlistenEncodingOpenGoToRow: UnlistenFn | undefined;
 let unlistenEncodingClearList: UnlistenFn | undefined;
 let unlistenEncodingDeleteSelected: UnlistenFn | undefined;
 let unlistenSetLanguage: UnlistenFn | undefined;
+let unlistenOpenLanguageDialog: UnlistenFn | undefined;
 const rowResizeObservers = new Map<number, ResizeObserver>();
 const rowElements = new Map<number, HTMLElement>();
 
@@ -495,7 +498,9 @@ watch(currentLanguage, () => {
   syncAppLanguageMenu();
 });
 
-void restoreEncodingDraft();
+window.requestAnimationFrame(() => {
+  void restoreEncodingDraft();
+});
 
 watch([errorMessage, statusMessage], ([error, status]) => {
   messageTimestamp.value = error || status ? formatMessageTimestamp() : "";
@@ -555,6 +560,7 @@ onBeforeUnmount(() => {
   unlistenEncodingClearList?.();
   unlistenEncodingDeleteSelected?.();
   unlistenSetLanguage?.();
+  unlistenOpenLanguageDialog?.();
   window.removeEventListener("focus", syncAppLanguageMenu);
   rowResizeObservers.forEach((observer) => observer.disconnect());
   rowResizeObservers.clear();
@@ -583,6 +589,7 @@ function handleWindowsMenuShortcut(event: KeyboardEvent) {
     { action: "encoding_unmapped_characters", run: () => void openUnmappedCharactersDialog() },
     { action: "encoding_unused_encodings", run: () => void openUnusedEncodingsDialog() },
     { action: "encoding_line_length", run: () => void openLineLengthDialog() },
+    { action: "open_language_dialog", run: () => openLanguageDialog() },
     { action: "language_en", run: () => setAppLanguage("en") },
     { action: "language_zh_hans", run: () => setAppLanguage("zh-Hans") },
   ];
@@ -733,6 +740,16 @@ function registerMenuListeners() {
     })
     .catch((error) => {
       console.warn("Failed to register language menu listener.", error);
+    });
+
+  listen("open-language-dialog", () => {
+    openLanguageDialog();
+  })
+    .then((unlisten) => {
+      unlistenOpenLanguageDialog = unlisten;
+    })
+    .catch((error) => {
+      console.warn("Failed to register open language dialog menu listener.", error);
     });
 }
 
@@ -915,6 +932,7 @@ type EncodingDialog =
   | "exportText"
   | "goToRow"
   | "importText"
+  | "language"
   | "lineLength"
   | "unmappedCharacters"
   | "unusedEncodings";
@@ -953,6 +971,9 @@ function openEncodingDialog(dialog: EncodingDialog) {
     case "importText":
       isImportDialogOpen.value = true;
       break;
+    case "language":
+      isLanguageDialogOpen.value = true;
+      break;
     case "lineLength":
       isLineLengthDialogOpen.value = true;
       break;
@@ -973,6 +994,7 @@ function closeEncodingDialogs() {
   isExportDialogOpen.value = false;
   isGoToRowDialogOpen.value = false;
   isImportDialogOpen.value = false;
+  isLanguageDialogOpen.value = false;
   isLineLengthDialogOpen.value = false;
   isUnmappedCharactersDialogOpen.value = false;
   isUnusedEncodingsDialogOpen.value = false;
@@ -2101,6 +2123,19 @@ function openGoToRowDialog() {
   openEncodingDialog("goToRow");
 }
 
+function openLanguageDialog() {
+  openEncodingDialog("language");
+}
+
+function closeLanguageDialog() {
+  isLanguageDialogOpen.value = false;
+}
+
+function selectLanguage(language: AppLanguage) {
+  setAppLanguage(language);
+  closeLanguageDialog();
+}
+
 function closeGoToRowDialog() {
   isGoToRowDialogOpen.value = false;
 }
@@ -2953,6 +2988,13 @@ function refreshDefaultCheckMessages() {
       :max-row="rows.length"
       @close="closeGoToRowDialog"
       @confirm="confirmGoToRowDialog"
+    />
+
+    <LanguageDialog
+      v-if="isLanguageDialogOpen"
+      :current-language="currentLanguage"
+      @close="closeLanguageDialog"
+      @select="selectLanguage"
     />
 
     <CharacterStatsDialog

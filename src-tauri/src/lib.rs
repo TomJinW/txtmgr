@@ -19,6 +19,7 @@ const IMPORT_EXCEL_MENU_ID: &str = "import_excel";
 const EXPORT_EXCEL_MENU_ID: &str = "export_excel";
 const IMPORT_SRT_MENU_ID: &str = "import_srt";
 const EXPORT_SRT_MENU_ID: &str = "export_srt";
+const OPEN_LANGUAGE_DIALOG_MENU_ID: &str = "open_language_dialog";
 const LANGUAGE_EN_MENU_ID: &str = "language_en";
 const LANGUAGE_ZH_HANS_MENU_ID: &str = "language_zh_hans";
 const CHARACTER_STATS_MENU_ID: &str = "character_stats";
@@ -609,10 +610,13 @@ fn set_app_language_menu(app: AppHandle, language: String) -> Result<(), String>
     #[cfg(not(target_os = "macos"))]
     {
         if encoding_is_focused {
-            if let Some(window) = app.get_webview_window("encoding") {
-                let menu =
-                    build_encoding_menu_for(&app, language).map_err(|error| error.to_string())?;
-                window.set_menu(menu).map_err(|error| error.to_string())?;
+            #[cfg(target_os = "windows")]
+            {
+                if let Some(window) = app.get_webview_window("encoding") {
+                    let menu = build_encoding_menu_for(&app, language)
+                        .map_err(|error| error.to_string())?;
+                    window.set_menu(menu).map_err(|error| error.to_string())?;
+                }
             }
         } else if let Some(window) = app.get_webview_window("main") {
             let menu = build_main_menu_for(&app, language).map_err(|error| error.to_string())?;
@@ -659,6 +663,13 @@ fn menu_label(language: &str, key: &str) -> &'static str {
                 "语言"
             } else {
                 "Language"
+            }
+        }
+        "language_dialog" => {
+            if zh {
+                "语言..."
+            } else {
+                "Language..."
             }
         }
         "read_json" => {
@@ -905,16 +916,12 @@ fn build_encoding_menu_for<R: Runtime>(
     .accelerator(shortcut_accelerator(ENCODING_LINE_LENGTH_MENU_ID))
     .build(app)?;
 
-    let language_english = MenuItemBuilder::with_id(LANGUAGE_EN_MENU_ID, "English")
-        .accelerator(shortcut_accelerator(LANGUAGE_EN_MENU_ID))
-        .build(app)?;
-    let language_zh_hans = MenuItemBuilder::with_id(LANGUAGE_ZH_HANS_MENU_ID, "简体中文")
-        .accelerator(shortcut_accelerator(LANGUAGE_ZH_HANS_MENU_ID))
-        .build(app)?;
-    let language_menu = SubmenuBuilder::new(app, menu_label(language, "language"))
-        .item(&language_english)
-        .item(&language_zh_hans)
-        .build()?;
+    let language_dialog = MenuItemBuilder::with_id(
+        OPEN_LANGUAGE_DIALOG_MENU_ID,
+        menu_label(language, "language_dialog"),
+    )
+    .accelerator(shortcut_accelerator(OPEN_LANGUAGE_DIALOG_MENU_ID))
+    .build(app)?;
 
     let file_menu = SubmenuBuilder::new(app, menu_label(language, "file"))
         .item(&read_json)
@@ -928,7 +935,7 @@ fn build_encoding_menu_for<R: Runtime>(
 
     let tools_menu = SubmenuBuilder::new(app, menu_label(language, "tools"))
         .item(&go_to_row)
-        .item(&language_menu)
+        .item(&language_dialog)
         .item(&clear_list)
         .item(&delete_selected)
         .build()?;
@@ -1032,20 +1039,16 @@ fn build_main_menu_for<R: Runtime>(app: &AppHandle<R>, language: &str) -> tauri:
     .accelerator(shortcut_accelerator(CHARACTER_STATS_MENU_ID))
     .build(app)?;
 
-    let language_english = MenuItemBuilder::with_id(LANGUAGE_EN_MENU_ID, "English")
-        .accelerator(shortcut_accelerator(LANGUAGE_EN_MENU_ID))
-        .build(app)?;
-    let language_zh_hans = MenuItemBuilder::with_id(LANGUAGE_ZH_HANS_MENU_ID, "简体中文")
-        .accelerator(shortcut_accelerator(LANGUAGE_ZH_HANS_MENU_ID))
-        .build(app)?;
-    let language_menu = SubmenuBuilder::new(app, menu_label(language, "language"))
-        .item(&language_english)
-        .item(&language_zh_hans)
-        .build()?;
+    let language_dialog = MenuItemBuilder::with_id(
+        OPEN_LANGUAGE_DIALOG_MENU_ID,
+        menu_label(language, "language_dialog"),
+    )
+    .accelerator(shortcut_accelerator(OPEN_LANGUAGE_DIALOG_MENU_ID))
+    .build(app)?;
 
     let tools_menu = SubmenuBuilder::new(app, menu_label(language, "tools"))
         .item(&go_to_row)
-        .item(&language_menu)
+        .item(&language_dialog)
         .item(&open_encoding_manager)
         .item(&llm_server_settings)
         .item(&ai_translation)
@@ -1137,6 +1140,9 @@ fn emit_encoding_menu_event<R: Runtime, T: Emitter<R>>(target: &T, menu_id: &str
         ENCODING_LINE_LENGTH_MENU_ID => {
             let _ = target.emit("encoding-open-line-length", ());
         }
+        OPEN_LANGUAGE_DIALOG_MENU_ID => {
+            let _ = target.emit("open-language-dialog", ());
+        }
         LANGUAGE_EN_MENU_ID => {
             let _ = target.emit("set-language", serde_json::json!({ "language": "en" }));
         }
@@ -1181,6 +1187,9 @@ fn emit_main_menu_event<R: Runtime, T: Emitter<R>>(app: &AppHandle<R>, target: &
         }
         EXPORT_SRT_MENU_ID => {
             let _ = target.emit("export-srt", ());
+        }
+        OPEN_LANGUAGE_DIALOG_MENU_ID => {
+            let _ = target.emit("open-language-dialog", ());
         }
         LANGUAGE_EN_MENU_ID => {
             let _ = target.emit("set-language", serde_json::json!({ "language": "en" }));
@@ -1227,9 +1236,16 @@ fn open_encoding_manager<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     .inner_size(760.0, 860.0)
     .build()?;
 
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
     {
         window.set_menu(build_encoding_menu(app)?)?;
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        // Linux native window menus are inconsistent across desktop shells and
+        // have caused the auxiliary window to hang on open. The Encoding UI and
+        // frontend shortcut fallback remain available without attaching a menu.
     }
 
     #[cfg(target_os = "macos")]
@@ -1322,6 +1338,7 @@ pub fn run() {
                             | ENCODING_UNMAPPED_CHARACTERS_MENU_ID
                             | ENCODING_UNUSED_ENCODINGS_MENU_ID
                             | ENCODING_LINE_LENGTH_MENU_ID
+                            | OPEN_LANGUAGE_DIALOG_MENU_ID
                             | LANGUAGE_EN_MENU_ID
                             | LANGUAGE_ZH_HANS_MENU_ID => {
                                 emit_encoding_menu_event(&window, event.id().as_ref());
