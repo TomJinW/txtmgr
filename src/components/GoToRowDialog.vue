@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { nextTick, ref, watch } from "vue";
+import { t } from "../i18n";
 
 defineProps<{
   maxRow: number;
@@ -33,8 +34,8 @@ watch(
       aria-labelledby="go-to-row-dialog-title"
       @submit.prevent="emit('confirm')"
     >
-      <h2 id="go-to-row-dialog-title">Go to row</h2>
-      <label for="go-to-row-dialog-input">Row number</label>
+      <h2 id="go-to-row-dialog-title">{{ t("main.goToRow") }}</h2>
+      <label for="go-to-row-dialog-input">{{ t("main.rows") }}</label>
       <input
         id="go-to-row-dialog-input"
         ref="input"
@@ -46,8 +47,8 @@ watch(
         @keydown.escape="emit('close')"
       />
       <div class="dialog-actions">
-        <button type="button" @click="emit('close')">Cancel</button>
-        <button type="submit" :disabled="maxRow === 0">Go</button>
+        <button type="button" @click="emit('close')">{{ t("common.cancel") }}</button>
+        <button type="submit" :disabled="maxRow === 0">{{ t("main.go") }}</button>
       </div>
     </form>
   </div>

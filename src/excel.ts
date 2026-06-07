@@ -1,5 +1,7 @@
 import { columns, excelDataColumnKeys } from "./constants";
+import { t } from "./i18n";
 import type {
+  EncodingRow,
   ExcelColumnKey,
   ExcelSheet,
   ImportedExcelSheet,
@@ -7,6 +9,8 @@ import type {
   ZipEntry,
 } from "./types";
 
+// This module writes and reads a deliberately small XLSX subset so the app can
+// run without a native Excel dependency inside Tauri.
 export function ensureXlsxExtension(path: string) {
   return /\.xlsx$/i.test(path) ? path : `${path}.xlsx`;
 }
@@ -18,7 +22,7 @@ export function excelCellText(cells: string[], oneBasedColumn: number) {
 export function requiredPositiveInteger(value: unknown, label: string) {
   const parsed = Number.parseInt(String(value), 10);
   if (!Number.isInteger(parsed) || parsed < 1) {
-    throw new Error(`${label} must be a number from 1.`);
+    throw new Error(`${label} ${t("message.mustBeNumberFromOne")}`);
   }
 
   return parsed;
@@ -38,6 +42,7 @@ export function excelSheetsForRows(
     return [{ name: "Sentences", rows: exportRows }];
   }
 
+  // Empty file_name values are grouped into the historical "unamedsheet" name.
   const groups = new Map<string, { row: SentenceRow; index: number }[]>();
   for (const item of exportRows) {
     const sheetKey = item.row.file_name.trim() || "unamedsheet";
@@ -55,6 +60,8 @@ export function buildXlsxWorkbook(
   includeRowNumber: boolean,
   columnWidths: number[],
 ) {
+  // XLSX files are ZIP archives with XML parts. We emit only the parts needed
+  // for plain text cells, wrapped text, basic styles, and column widths.
   const safeSheets = uniqueSheetNames(sheets);
   const files: { path: string; content: string | Uint8Array }[] = [
     { path: "[Content_Types].xml", content: xlsxContentTypesXml(safeSheets.length) },
@@ -77,7 +84,32 @@ export function buildXlsxWorkbook(
   return createZipFile(files);
 }
 
+export function buildEncodingXlsxWorkbook(
+  exportRows: { row: EncodingRow; index: number }[],
+  columnWidths: number[],
+) {
+  const sheets = uniqueSheetNames([{ name: "Encoding", rows: exportRows }]);
+  const files: { path: string; content: string | Uint8Array }[] = [
+    { path: "[Content_Types].xml", content: xlsxContentTypesXml(sheets.length) },
+    { path: "_rels/.rels", content: xlsxRootRelsXml() },
+    { path: "xl/workbook.xml", content: xlsxWorkbookXml(sheets) },
+    {
+      path: "xl/_rels/workbook.xml.rels",
+      content: xlsxWorkbookRelsXml(sheets.length),
+    },
+    { path: "xl/styles.xml", content: xlsxStylesXml() },
+    {
+      path: "xl/worksheets/sheet1.xml",
+      content: xlsxEncodingWorksheetXml(exportRows, columnWidths),
+    },
+  ];
+
+  return createZipFile(files);
+}
+
 export async function readXlsxWorkbook(bytes: Uint8Array) {
+  // Imports preserve blank/missing cells by using the cell reference positions,
+  // because users configure columns with one-based Excel numbers.
   const zipFiles = await unzipXlsxFiles(bytes);
   const workbookXml = zipText(zipFiles, "xl/workbook.xml");
   const workbookRelsXml = zipText(zipFiles, "xl/_rels/workbook.xml.rels");
@@ -105,7 +137,7 @@ export async function readXlsxWorkbook(bytes: Uint8Array) {
   return importedSheets;
 }
 
-function uniqueSheetNames(sheets: ExcelSheet[]) {
+function uniqueSheetNames<T extends { name: string }>(sheets: T[]) {
   const used = new Set<string>();
 
   return sheets.map((sheet, index) => {
@@ -114,6 +146,7 @@ function uniqueSheetNames(sheets: ExcelSheet[]) {
     let nextName = baseName;
     let suffix = 2;
 
+    // Excel sheet names are case-insensitively unique and limited to 31 chars.
     while (used.has(nextName.toLowerCase())) {
       const suffixText = ` ${suffix}`;
       nextName = `${baseName.slice(0, 31 - suffixText.length)}${suffixText}`;
@@ -158,6 +191,46 @@ function xlsxWorksheetXml(
   <cols>${columnKeys.map((key, index) => excelColumnWidthXml(key, index, columnWidths)).join("")}</cols>
   <sheetData>${headerRow}${dataRows}</sheetData>
 </worksheet>`;
+}
+
+function xlsxEncodingWorksheetXml(
+  exportRows: { row: EncodingRow; index: number }[],
+  columnWidths: number[],
+) {
+  const columnKeys = ["row_number", "char", "code", "width", "note"] as const;
+  const headerRow = xlsxRowXml(1, ["#", "char", "code", "width", "note"], 1);
+  const dataRows = exportRows
+    .map(({ row, index }, rowOffset) =>
+      xlsxRowXml(
+        rowOffset + 2,
+        [
+          String(index + 1),
+          row.original_char,
+          row.code,
+          row.width,
+          row.note,
+        ],
+        2,
+      ),
+    )
+    .join("");
+
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <cols>${columnKeys.map((_key, index) => encodingExcelColumnWidthXml(index, columnWidths)).join("")}</cols>
+  <sheetData>${headerRow}${dataRows}</sheetData>
+</worksheet>`;
+}
+
+function encodingExcelColumnWidthXml(index: number, columnWidths: number[]) {
+  const pixelWidth = columnWidths[index] ?? 120;
+  const excelWidth = Math.max(
+    8,
+    Math.min(80, Math.round((pixelWidth / 7) * 10) / 10),
+  );
+  const columnNumber = index + 1;
+
+  return `<col min="${columnNumber}" max="${columnNumber}" width="${excelWidth}" customWidth="1"/>`;
 }
 
 function excelColumnLabel(key: ExcelColumnKey) {
@@ -237,7 +310,7 @@ function xlsxRootRelsXml() {
 </Relationships>`;
 }
 
-function xlsxWorkbookXml(sheets: ExcelSheet[]) {
+function xlsxWorkbookXml<T extends { name: string }>(sheets: T[]) {
   const sheetNodes = sheets
     .map(
       (sheet, index) =>
@@ -301,6 +374,8 @@ async function unzipXlsxFiles(bytes: Uint8Array) {
 }
 
 function zipEntries(bytes: Uint8Array) {
+  // Read the central directory instead of scanning local file headers; this is
+  // the reliable way to find ZIP entries in XLSX files.
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const eocdOffset = findZipEndRecord(bytes);
   const entryCount = view.getUint16(eocdOffset + 10, true);
@@ -310,7 +385,7 @@ function zipEntries(bytes: Uint8Array) {
 
   for (let index = 0; index < entryCount; index += 1) {
     if (view.getUint32(directoryOffset, true) !== 0x02014b50) {
-      throw new Error("Invalid Excel ZIP central directory.");
+      throw new Error(t("message.invalidExcelZipCentralDirectory"));
     }
 
     const compressionMethod = view.getUint16(directoryOffset + 10, true);
@@ -344,7 +419,7 @@ function findZipEndRecord(bytes: Uint8Array) {
     if (view.getUint32(offset, true) === 0x06054b50) return offset;
   }
 
-  throw new Error("Invalid Excel ZIP file.");
+  throw new Error(t("message.invalidExcelZipFile"));
 }
 
 async function zipEntryBytes(bytes: Uint8Array, entry: ZipEntry) {
@@ -366,7 +441,7 @@ async function zipEntryBytes(bytes: Uint8Array, entry: ZipEntry) {
 
 async function inflateRawZipEntry(bytes: Uint8Array, expectedSize: number) {
   if (!("DecompressionStream" in globalThis)) {
-    throw new Error("This platform cannot decompress standard Excel files.");
+    throw new Error(t("message.excelDecompressUnavailable"));
   }
 
   const stream = new Blob([bytes]).stream().pipeThrough(
@@ -374,7 +449,7 @@ async function inflateRawZipEntry(bytes: Uint8Array, expectedSize: number) {
   );
   const decompressed = new Uint8Array(await new Response(stream).arrayBuffer());
   if (expectedSize > 0 && decompressed.length !== expectedSize) {
-    throw new Error("Excel ZIP entry did not decompress correctly.");
+    throw new Error(t("message.excelZipEntryBadDecompress"));
   }
 
   return decompressed;
@@ -407,7 +482,7 @@ function normalizeZipPath(path: string) {
 function parseXml(xml: string) {
   const document = new DOMParser().parseFromString(xml, "application/xml");
   if (document.getElementsByTagName("parsererror").length > 0) {
-    throw new Error("Excel XML could not be parsed.");
+    throw new Error(t("message.excelXmlParseFailed"));
   }
 
   return document;
@@ -443,6 +518,8 @@ function parseWorksheetRows(xml: string, sharedStrings: string[]) {
 
   for (const rowElement of rowElements) {
     const rowNumber = Number.parseInt(rowElement.getAttribute("r") ?? "", 10);
+    // Excel can skip row/cell nodes for blanks; honor explicit row and cell
+    // references so imported column numbers stay aligned.
     const rowIndex = Number.isInteger(rowNumber) && rowNumber > 0
       ? rowNumber - 1
       : parsedRows.length;

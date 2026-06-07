@@ -1,10 +1,13 @@
 <script setup lang="ts">
 import { nextTick, ref, watch } from "vue";
 import type { FileNameImportMode } from "../types";
+import { t } from "../i18n";
 
 defineProps<{
   canImport: boolean;
+  isError?: boolean;
   isImporting: boolean;
+  message?: string;
 }>();
 
 const emit = defineEmits<{
@@ -24,6 +27,7 @@ const fileNameMode = defineModel<FileNameImportMode>("fileNameMode", {
   required: true,
 });
 const fileNameColumn = defineModel<string>("fileNameColumn", { required: true });
+const appendRows = defineModel<boolean>("appendRows", { required: true });
 const input = ref<HTMLInputElement | null>(null);
 
 watch(
@@ -46,9 +50,15 @@ watch(
       aria-labelledby="import-excel-dialog-title"
       @submit.prevent="emit('confirm')"
     >
-      <h2 id="import-excel-dialog-title">Import Excel</h2>
-      <p class="dialog-hint">Rows and columns start from 1, matching Excel.</p>
-      <label for="import-excel-path">Path</label>
+      <h2 id="import-excel-dialog-title">{{ t("dialog.importExcel") }}</h2>
+      <p class="dialog-hint">{{ t("dialog.rowsColumnsStartAtOne") }}</p>
+      <p
+        class="dialog-inline-message"
+        :class="{ 'dialog-inline-error': isError, empty: !message }"
+      >
+        {{ message || "\u00a0" }}
+      </p>
+      <label for="import-excel-path">{{ t("common.path") }}</label>
       <div class="path-picker-row">
         <input
           id="import-excel-path"
@@ -57,12 +67,12 @@ watch(
           type="text"
           @keydown.escape="emit('close')"
         />
-        <button type="button" @click="emit('browse')">Browse</button>
+        <button type="button" @click="emit('browse')">{{ t("common.browse") }}</button>
       </div>
 
       <div class="excel-import-grid">
         <label>
-          <span>Start row</span>
+          <span>{{ t("dialog.startRow") }}</span>
           <input
             v-model.number="startRow"
             type="number"
@@ -71,16 +81,16 @@ watch(
           />
         </label>
         <label>
-          <span>title_addr column (optional, leave blank to skip)</span>
+          <span>title_addr column ({{ t("dialog.optional") }})</span>
           <input
             v-model="titleColumn"
             type="text"
             inputmode="numeric"
-            placeholder="Optional"
+            :placeholder="t('dialog.optional')"
           />
         </label>
         <label>
-          <span>original_text column (required)</span>
+          <span>original_text column ({{ t("dialog.required") }})</span>
           <input
             v-model="originalColumn"
             type="text"
@@ -89,7 +99,7 @@ watch(
           />
         </label>
         <label>
-          <span>translated_text column (required)</span>
+          <span>translated_text column ({{ t("dialog.required") }})</span>
           <input
             v-model="translatedColumn"
             type="text"
@@ -98,47 +108,52 @@ watch(
           />
         </label>
         <label>
-          <span>note column (optional, leave blank to skip)</span>
+          <span>note column ({{ t("dialog.optional") }})</span>
           <input
             v-model="noteColumn"
             type="text"
             inputmode="numeric"
-            placeholder="Optional"
+            :placeholder="t('dialog.optional')"
           />
         </label>
         <label>
-          <span>state column (optional, blank means unmarked)</span>
+          <span>state column ({{ t("dialog.optional") }})</span>
           <input
             v-model="stateColumn"
             type="text"
             inputmode="numeric"
-            placeholder="Default unmarked"
+            :placeholder="t('dialog.defaultUnmarked')"
           />
         </label>
         <label>
-          <span>file_name source (optional)</span>
+          <span>{{ t("dialog.fileNameSource") }} ({{ t("dialog.optional") }})</span>
           <select v-model="fileNameMode">
-            <option value="none">None</option>
-            <option value="column">Column</option>
-            <option value="sheet">Sheet name</option>
+            <option value="none">{{ t("dialog.none") }}</option>
+            <option value="column">{{ t("dialog.column") }}</option>
+            <option value="sheet">{{ t("dialog.sheetName") }}</option>
           </select>
         </label>
         <label>
-          <span>file_name column (required only when source is Column)</span>
+          <span>file_name column</span>
           <input
             v-model="fileNameColumn"
             type="text"
             inputmode="numeric"
             :disabled="fileNameMode !== 'column'"
-            placeholder="Required for Column"
+            :placeholder="t('dialog.requiredForColumn')"
           />
         </label>
       </div>
 
+      <label class="checkbox-label append-option">
+        <input v-model="appendRows" type="checkbox" />
+        <span>{{ t("dialog.appendRows") }}</span>
+      </label>
+
       <div class="dialog-actions">
-        <button type="button" @click="emit('close')">Cancel</button>
+        <button type="button" @click="emit('close')">{{ t("common.cancel") }}</button>
         <button type="submit" :disabled="!canImport">
-          {{ isImporting ? "Importing..." : "Import" }}
+          {{ isImporting ? t("common.importing") : t("common.import") }}
         </button>
       </div>
     </form>

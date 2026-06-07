@@ -3,11 +3,10 @@ import { nextTick, ref, watch } from "vue";
 import { t } from "../i18n";
 
 defineProps<{
-  canExport: boolean;
+  canImport: boolean;
   isError?: boolean;
-  isExporting: boolean;
+  isImporting: boolean;
   message?: string;
-  rowCount: number;
 }>();
 
 const emit = defineEmits<{
@@ -17,11 +16,7 @@ const emit = defineEmits<{
 }>();
 
 const path = defineModel<string>("path", { required: true });
-const filteredOnly = defineModel<boolean>("filteredOnly", { required: true });
-const splitByFileName = defineModel<boolean>("splitByFileName", { required: true });
-const includeRowNumber = defineModel<boolean>("includeRowNumber", {
-  required: true,
-});
+const appendRows = defineModel<boolean>("appendRows", { required: true });
 const input = ref<HTMLInputElement | null>(null);
 
 watch(
@@ -38,23 +33,26 @@ watch(
 <template>
   <div class="dialog-backdrop" role="presentation">
     <form
-      class="export-excel-dialog"
+      class="excel-import-dialog"
       role="dialog"
       aria-modal="true"
-      aria-labelledby="export-excel-dialog-title"
+      aria-labelledby="import-srt-dialog-title"
       @submit.prevent="emit('confirm')"
     >
-      <h2 id="export-excel-dialog-title">{{ t("dialog.exportExcel") }}</h2>
+      <h2 id="import-srt-dialog-title">{{ t("dialog.importSrt") }}</h2>
+      <p class="dialog-hint">
+        {{ t("dialog.srtImportHint") }}
+      </p>
       <p
         class="dialog-inline-message"
         :class="{ 'dialog-inline-error': isError, empty: !message }"
       >
         {{ message || "\u00a0" }}
       </p>
-      <label for="export-excel-path">{{ t("common.path") }}</label>
+      <label for="import-srt-path">{{ t("common.path") }}</label>
       <div class="path-picker-row">
         <input
-          id="export-excel-path"
+          id="import-srt-path"
           ref="input"
           v-model="path"
           type="text"
@@ -63,25 +61,15 @@ watch(
         <button type="button" @click="emit('browse')">{{ t("common.browse") }}</button>
       </div>
 
-      <div class="export-options">
-        <label class="checkbox-label">
-          <input v-model="filteredOnly" type="checkbox" />
-          <span>{{ t("dialog.filteredOnly") }}</span>
-        </label>
-        <label class="checkbox-label">
-          <input v-model="splitByFileName" type="checkbox" />
-          <span>{{ t("dialog.splitByFileName") }}</span>
-        </label>
-        <label class="checkbox-label">
-          <input v-model="includeRowNumber" type="checkbox" />
-          <span>{{ t("dialog.keepRowNumber") }}</span>
-        </label>
-      </div>
+      <label class="checkbox-label append-option">
+        <input v-model="appendRows" type="checkbox" />
+        <span>{{ t("dialog.appendRows") }}</span>
+      </label>
 
       <div class="dialog-actions">
         <button type="button" @click="emit('close')">{{ t("common.cancel") }}</button>
-        <button type="submit" :disabled="!canExport || rowCount === 0">
-          {{ isExporting ? t("common.saving") : t("common.save") }}
+        <button type="submit" :disabled="!canImport">
+          {{ isImporting ? t("common.importing") : t("common.import") }}
         </button>
       </div>
     </form>

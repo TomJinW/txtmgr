@@ -1,5 +1,15 @@
-export type StateValue = "❓unmarked" | "✅passed" | "⚠️warning" | "❌error";
+export type StateValue =
+  | "❓unmarked"
+  | "✅passed"
+  | "⚠️warning"
+  | "❌error"
+  | "⭕️temp"
+  | "1️⃣custom1"
+  | "2️⃣custom2"
+  | "3️⃣custom3";
 
+// SentenceRow is the canonical table/document row shape used by JSON,
+// Excel/SRT conversion, filtering, and AI translation.
 export type SentenceRow = {
   title_addr: string;
   original_text: string;
@@ -9,6 +19,8 @@ export type SentenceRow = {
   file_name: string;
 };
 
+// EncodingRow is intentionally small: export-to-TBL only uses char/code, while
+// width/note are helper metadata for checks and editing.
 export type EncodingRow = {
   original_char: string;
   code: string;
@@ -16,17 +28,23 @@ export type EncodingRow = {
   note: string;
 };
 
+// Input files historically wrap fields in a Sentence object; parsing code keeps
+// accepting partial rows so older or hand-edited JSON can still load.
 export type SentenceInput = {
   Sentence?: Partial<Record<keyof SentenceRow, unknown>>;
 };
 
+// StoredDraft is persisted through Tauri app data. localStorage may still hold
+// older drafts briefly during migration.
 export type StoredDraft = {
   fileName: string;
+  jsonPath?: string;
   rows: SentenceRow[];
 };
 
 export type TableSnapshot = {
   fileName: string;
+  jsonPath?: string;
   rows: SentenceRow[];
 };
 
@@ -62,16 +80,20 @@ export type ZipEntry = {
   size: number;
 };
 
+// Stat filters are stored as structured objects because state filters carry a
+// value and the other filters are countable categories.
 export type StatFilter =
   | { type: "state"; state: StateValue }
   | { type: "empty_translation" }
   | { type: "not_translated" }
+  | { type: "original_equals_translated" }
   | { type: "has_note" }
   | { type: "duplicate_title_addr" };
 
 export type StatSnapshot = {
   duplicateTitleAddresses: number;
   emptyTranslations: number;
+  originalEqualsTranslated: number;
   memberships: Map<string, Set<number>>;
   notTranslated: number;
   rowsWithNotes: number;

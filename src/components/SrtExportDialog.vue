@@ -2,6 +2,13 @@
 import { nextTick, ref, watch } from "vue";
 import { t } from "../i18n";
 
+export type SrtExportEncoding =
+  | "utf-8"
+  | "utf-8-sig"
+  | "utf-16"
+  | "utf-16-le"
+  | "utf-16-be";
+
 defineProps<{
   canExport: boolean;
   isError?: boolean;
@@ -17,11 +24,9 @@ const emit = defineEmits<{
 }>();
 
 const path = defineModel<string>("path", { required: true });
+const encoding = defineModel<SrtExportEncoding>("encoding", { required: true });
+const bilingual = defineModel<boolean>("bilingual", { required: true });
 const filteredOnly = defineModel<boolean>("filteredOnly", { required: true });
-const splitByFileName = defineModel<boolean>("splitByFileName", { required: true });
-const includeRowNumber = defineModel<boolean>("includeRowNumber", {
-  required: true,
-});
 const input = ref<HTMLInputElement | null>(null);
 
 watch(
@@ -41,20 +46,20 @@ watch(
       class="export-excel-dialog"
       role="dialog"
       aria-modal="true"
-      aria-labelledby="export-excel-dialog-title"
+      aria-labelledby="export-srt-dialog-title"
       @submit.prevent="emit('confirm')"
     >
-      <h2 id="export-excel-dialog-title">{{ t("dialog.exportExcel") }}</h2>
+      <h2 id="export-srt-dialog-title">{{ t("dialog.exportSrt") }}</h2>
       <p
         class="dialog-inline-message"
         :class="{ 'dialog-inline-error': isError, empty: !message }"
       >
         {{ message || "\u00a0" }}
       </p>
-      <label for="export-excel-path">{{ t("common.path") }}</label>
+      <label for="export-srt-path">{{ t("common.path") }}</label>
       <div class="path-picker-row">
         <input
-          id="export-excel-path"
+          id="export-srt-path"
           ref="input"
           v-model="path"
           type="text"
@@ -63,18 +68,25 @@ watch(
         <button type="button" @click="emit('browse')">{{ t("common.browse") }}</button>
       </div>
 
+      <label class="srt-select-field">
+        <span>{{ t("dialog.outputEncoding") }}</span>
+        <select v-model="encoding">
+          <option value="utf-8">utf-8</option>
+          <option value="utf-8-sig">utf-8-sig</option>
+          <option value="utf-16">utf-16</option>
+          <option value="utf-16-le">utf-16-le</option>
+          <option value="utf-16-be">utf-16-be</option>
+        </select>
+      </label>
+
       <div class="export-options">
         <label class="checkbox-label">
           <input v-model="filteredOnly" type="checkbox" />
           <span>{{ t("dialog.filteredOnly") }}</span>
         </label>
         <label class="checkbox-label">
-          <input v-model="splitByFileName" type="checkbox" />
-          <span>{{ t("dialog.splitByFileName") }}</span>
-        </label>
-        <label class="checkbox-label">
-          <input v-model="includeRowNumber" type="checkbox" />
-          <span>{{ t("dialog.keepRowNumber") }}</span>
+          <input v-model="bilingual" type="checkbox" />
+          <span>{{ t("dialog.dualLanguageSrt") }}</span>
         </label>
       </div>
 

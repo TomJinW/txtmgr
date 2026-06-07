@@ -5,9 +5,27 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { readFile, writeFile, writeTextFile } from "@tauri-apps/plugin-fs";
+import AiTranslationDialog, {
+  type AiTranslationScope,
+  type AiTranslationSettings,
+} from "./components/AiTranslationDialog.vue";
+import AiTranslationRunDialog from "./components/AiTranslationRunDialog.vue";
+import AiTranslationSessionDialog, {
+  type AiTranslationSession,
+  type AiTranslationTask,
+} from "./components/AiTranslationSessionDialog.vue";
+import BulkStateDialog from "./components/BulkStateDialog.vue";
+import CharacterStatsDialog from "./components/CharacterStatsDialog.vue";
 import ExcelExportDialog from "./components/ExcelExportDialog.vue";
 import ExcelImportDialog from "./components/ExcelImportDialog.vue";
 import GoToRowDialog from "./components/GoToRowDialog.vue";
+import LlmSettingsDialog, {
+  type LlmServerSettings,
+} from "./components/LlmSettingsDialog.vue";
+import SrtExportDialog, {
+  type SrtExportEncoding,
+} from "./components/SrtExportDialog.vue";
+import SrtImportDialog from "./components/SrtImportDialog.vue";
 import {
   cjkFallbackOptions,
   cjkFallbackStorageKey,
@@ -21,9 +39,7 @@ import {
   maxHistorySteps,
   minColumnWidths,
   stateOptions,
-  textMatchOptions,
   textSearchColumns,
-  themeOptions,
   themeStorageKey,
   virtualOverscanRows,
 } from "./constants";
@@ -36,6 +52,14 @@ import {
   readXlsxWorkbook,
   requiredPositiveInteger,
 } from "./excel";
+import {
+  currentLanguage,
+  normalizeAppLanguage,
+  setAppLanguage,
+  t,
+  type AppLanguage,
+} from "./i18n";
+import { windowsShortcutMatches, type ShortcutAction } from "./shortcuts";
 import type {
   CjkFallbackColumn,
   CjkFallbackMode,
@@ -44,7 +68,6 @@ import type {
   SentenceRow,
   StateValue,
   StatFilter,
-  StatSnapshot,
   StoredDraft,
   TableSnapshot,
   TextMatchMode,
@@ -57,36 +80,97 @@ const columnFontSizes = ref(restoreColumnFontSizes());
 const cjkFallbackPrefs = ref(restoreCjkFallbackPrefs());
 const rows = ref<SentenceRow[]>([]);
 const fileName = ref("");
+const jsonPath = ref("");
 const errorMessage = ref("");
 const statusMessage = ref("");
+const messageTimestamp = ref(formatMessageTimestamp());
 const isSaving = ref(false);
 const isExportingExcel = ref(false);
 const isImportingExcel = ref(false);
+const isImportingSrt = ref(false);
+const isExportingSrt = ref(false);
 const searchText = ref("");
 const textMatchMode = ref<TextMatchMode>("contains");
 const isCaseSensitiveSearch = ref(false);
+const searchLengthColumn = ref<TextSearchKey>("translated_text");
+const searchLengthMin = ref("");
+const searchLengthMax = ref("");
 const activeStatFilters = ref<StatFilter[]>([]);
-const statSnapshot = ref<StatSnapshot>(createEmptyStatSnapshot());
-const isStatSnapshotDirty = ref(false);
 const goToRowValue = ref("");
+const rowFilterStart = ref("");
+const rowFilterEnd = ref("");
 const isGoToRowDialogOpen = ref(false);
+const isCharacterStatsDialogOpen = ref(false);
 const isExcelImportDialogOpen = ref(false);
 const isExcelExportDialogOpen = ref(false);
+const isSrtImportDialogOpen = ref(false);
+const isSrtExportDialogOpen = ref(false);
+const isLlmSettingsDialogOpen = ref(false);
+const isAiTranslationDialogOpen = ref(false);
+const isAiTranslationSessionDialogOpen = ref(false);
+const isBulkStateDialogOpen = ref(false);
+const llmSettingsStorageKey = "txtmgr.llmServerSettings.v1";
+const llmSettings = ref<LlmServerSettings>(restoreLlmSettings());
+const aiTranslationSettingsStorageKey = "txtmgr.aiTranslationSettings.v1";
+const aiTranslationSettings = ref<AiTranslationSettings>(restoreAiTranslationSettings());
+const aiTranslationSession = ref<AiTranslationSession | null>(null);
+const isPreparingAiTranslation = ref(false);
+const aiTranslationSessionMessage = ref(t("common.ready"));
+const selectedAiTranslationTaskIds = ref<Set<string>>(new Set());
+const updateAiTranslationStateOnApply = ref(true);
+const aiTranslationFinishedText = ref("");
+const aiTranslationCurrentText = ref("");
+const aiTranslationFinishedPreview = ref("");
+const aiTranslationCompletedCount = ref(0);
+const aiTranslationErrorCount = ref(0);
+const aiTranslationMessage = ref(t("common.ready"));
+const isAiTranslationStopRequested = ref(false);
+const isAiTranslationFakeMode = ref(false);
+const llmApiKeyInput = ref("");
+const hasStoredLlmApiKey = ref(false);
+const isTestingLlmConnection = ref(false);
+const llmSettingsMessage = ref(t("common.ready"));
 const excelImportPath = ref("");
 const excelImportStartRow = ref(2);
 const excelImportTitleColumn = ref("");
-const excelImportOriginalColumn = ref("2");
-const excelImportTranslatedColumn = ref("3");
+const excelImportOriginalColumn = ref("3");
+const excelImportTranslatedColumn = ref("4");
 const excelImportNoteColumn = ref("");
 const excelImportStateColumn = ref("");
 const excelImportFileNameMode = ref<FileNameImportMode>("none");
 const excelImportFileNameColumn = ref("");
+const excelImportAppendRows = ref(false);
 const excelExportPath = ref("");
 const exportFilteredOnly = ref(false);
 const exportSplitByFileName = ref(false);
 const exportIncludeRowNumber = ref(true);
+const srtImportPath = ref("");
+const srtImportAppendRows = ref(false);
+const srtExportPath = ref("");
+const srtExportEncoding = ref<SrtExportEncoding>("utf-8");
+const srtExportBilingual = ref(false);
+const srtExportFilteredOnly = ref(false);
 const selectedRowIds = ref<Set<number>>(new Set());
+const bulkStateValue = ref<StateValue>("❓unmarked");
+const characterStatsScope = ref<"all" | "filtered" | "selected">("filtered");
+const characterStatsIncludeAll = ref(true);
+const characterStatsTypes = ref<
+  ("western" | "han" | "kana" | "hangul" | "fullwidth" | "halfwidth" | "token")[]
+>([]);
+const characterStatsSortOrder = ref<"desc" | "asc">("desc");
+const characterStatsBracketTokenTypes = ref<("square" | "curly" | "angle")[]>([
+  "square",
+  "curly",
+  "angle",
+]);
+const characterStatsIgnoreWhitespace = ref(true);
+const isCountingCharacterStats = ref(false);
+const characterStatsProgress = ref(0);
+const characterStatsResult = ref("");
+const characterStatsMessage = ref(t("stats.notCountedYet"));
 const pendingDeleteIndex = ref<number | null>(null);
+const isClearRowsConfirmOpen = ref(false);
+const isDeleteSelectedConfirmOpen = ref(false);
 const undoStack = ref<string[]>([]);
 const redoStack = ref<string[]>([]);
 const themeMode = ref<ThemeMode>(restoreThemeMode());
@@ -97,23 +181,36 @@ const rowHeights = ref<Record<number, number>>({});
 const selectedSearchColumns = ref<TextSearchKey[]>(
   textSearchColumns.map((column) => column.key),
 );
-const fileInput = ref<HTMLInputElement | null>(null);
+
+// Most user-facing state lives in this component because the table, filters,
+// import/export dialogs, and AI flow all need the same row list. Keep helpers
+// below grouped by workflow instead of splitting state across stores.
 let autoSaveTimer: number | undefined;
 let columnWidthSaveTimer: number | undefined;
 let nextRowIdentity = 1;
-let unlistenRefreshFilters: UnlistenFn | undefined;
 let unlistenOpenGoToRow: UnlistenFn | undefined;
 let unlistenReadJson: UnlistenFn | undefined;
 let unlistenSaveJson: UnlistenFn | undefined;
+let unlistenSaveJsonAs: UnlistenFn | undefined;
 let unlistenImportExcel: UnlistenFn | undefined;
 let unlistenExportExcel: UnlistenFn | undefined;
+let unlistenImportSrt: UnlistenFn | undefined;
+let unlistenExportSrt: UnlistenFn | undefined;
+let unlistenSetLanguage: UnlistenFn | undefined;
+let unlistenOpenCharacterStats: UnlistenFn | undefined;
+let unlistenOpenLlmSettings: UnlistenFn | undefined;
+let unlistenOpenAiTranslation: UnlistenFn | undefined;
 let unlistenUndoTableChange: UnlistenFn | undefined;
 let unlistenRedoTableChange: UnlistenFn | undefined;
 let unlistenClearList: UnlistenFn | undefined;
 let unlistenDeleteSelected: UnlistenFn | undefined;
+let unlistenBulkState: UnlistenFn | undefined;
 let pendingEditSnapshot: string | null = null;
 const rowResizeObservers = new Map<number, ResizeObserver>();
 const rowElements = new Map<number, HTMLElement>();
+
+// Row objects can be inserted, deleted, and reordered. A WeakMap identity keeps
+// selection/filter bookkeeping stable without mutating imported row data.
 const rowIdentities = new WeakMap<SentenceRow, number>();
 const appWindow = getCurrentWindow();
 const tableEndSpacerWidth = 24;
@@ -147,10 +244,26 @@ const canExportExcel = computed(
     excelExportPath.value.trim() !== "" &&
     !isExportingExcel.value,
 );
+const canImportSrt = computed(
+  () => srtImportPath.value.trim() !== "" && !isImportingSrt.value,
+);
+const canExportSrt = computed(
+  () =>
+    rows.value.length > 0 &&
+    srtExportPath.value.trim() !== "" &&
+    !isExportingSrt.value,
+);
 const canUndoTableChange = computed(() => undoStack.value.length > 0);
 const canRedoTableChange = computed(() => redoStack.value.length > 0);
 
 const selectedRowCount = computed(() => selectedRowIds.value.size);
+
+const characterStatsRowCount = computed(() => characterStatsRows().length);
+const aiTranslationRowCount = computed(() => aiTranslationRows().length);
+const displayedMessage = computed(() => {
+  const message = errorMessage.value || statusMessage.value;
+  return message ? `${message} ${messageTimestamp.value}` : "";
+});
 
 const filteredRowIds = computed(() =>
   filteredRows.value.map(({ row }) => getRowIdentity(row)),
@@ -174,29 +287,84 @@ const textFilteredRows = computed(() => {
   return rows.value
     .map((row, index) => ({ row, index }))
     .filter(({ row }) => {
-      return (
-        query === "" ||
-        searchableColumns.some((key) => textMatches(row[key], query))
-      );
+      const textMatched =
+        query === "" || searchableColumns.some((key) => textMatches(row[key], query));
+      return textMatched && textLengthMatches(row[searchLengthColumn.value]);
     });
 });
 
+// Filtering is intentionally layered: text/length filters run first, then stat
+// buttons and row range filters. Counts use the text-filtered base so category
+// buttons answer "how many matches remain for this search?".
 const filteredRows = computed(() =>
-  textFilteredRows.value.filter(({ row }) => rowMatchesStatFilter(row)),
+  textFilteredRows.value.filter(
+    ({ row, index }) => rowMatchesStatFilter(row) && rowMatchesRowRange(index),
+  ),
+);
+
+const duplicateTitleAddressIds = computed(() => {
+  const groups = new Map<string, number[]>();
+
+  rows.value.forEach((row) => {
+    const titleAddress = row.title_addr.trim();
+    if (titleAddress === "") return;
+    groups.set(titleAddress, [...(groups.get(titleAddress) ?? []), getRowIdentity(row)]);
+  });
+
+  return new Set(
+    Array.from(groups.values())
+      .filter((ids) => ids.length > 1)
+      .flat(),
+  );
+});
+
+const hasActiveRowFilter = computed(
+  () =>
+    String(rowFilterStart.value).trim() !== "" ||
+    String(rowFilterEnd.value).trim() !== "",
 );
 
 const rowStats = computed(() => {
-  return {
-    duplicateTitleAddresses: statSnapshot.value.duplicateTitleAddresses,
-    emptyTranslations: statSnapshot.value.emptyTranslations,
+  const stateCounts = Object.fromEntries(
+    stateOptions.map((state) => [state, 0]),
+  ) as Record<StateValue, number>;
+  const stats = {
+    duplicateTitleAddresses: 0,
+    emptyTranslations: 0,
     filtered: filteredRows.value.length,
-    notTranslated: statSnapshot.value.notTranslated,
-    rowsWithNotes: statSnapshot.value.rowsWithNotes,
-    stateCounts: statSnapshot.value.stateCounts,
-    total: statSnapshot.value.total,
+    notTranslated: 0,
+    originalEqualsTranslated: 0,
+    rowsWithNotes: 0,
+    stateCounts,
+    total: rows.value.length,
+  };
+
+  for (const { row } of textFilteredRows.value) {
+    stats.stateCounts[row.state] += 1;
+    if (rowMatchesSingleStatFilter(row, { type: "empty_translation" })) {
+      stats.emptyTranslations += 1;
+    }
+    if (rowMatchesSingleStatFilter(row, { type: "not_translated" })) {
+      stats.notTranslated += 1;
+    }
+    if (rowMatchesSingleStatFilter(row, { type: "original_equals_translated" })) {
+      stats.originalEqualsTranslated += 1;
+    }
+    if (rowMatchesSingleStatFilter(row, { type: "has_note" })) {
+      stats.rowsWithNotes += 1;
+    }
+    if (rowMatchesSingleStatFilter(row, { type: "duplicate_title_addr" })) {
+      stats.duplicateTitleAddresses += 1;
+    }
+  }
+
+  return {
+    ...stats,
   };
 });
 
+// Virtualization keeps only visible rows mounted. Row heights are measured
+// separately because multi-line text can make each row a different height.
 const virtualRange = computed(() => {
   const items = filteredRows.value;
   const scrollTop = tableScrollTop.value;
@@ -238,14 +406,20 @@ const renderedRows = computed(() =>
   filteredRows.value.slice(virtualRange.value.start, virtualRange.value.end),
 );
 
-restoreDraft();
+// Draft restore is async because table contents now live in Tauri app data.
+// Watchers below will re-save the restored data if it came from legacy storage.
+void restoreDraft();
 syncWindowTheme();
 registerMenuListeners();
+syncAppLanguageMenu();
 window.addEventListener("focus", handleWindowFocus);
 window.addEventListener("keydown", handleWindowsMenuShortcut);
+window.addEventListener("keydown", handleAiTranslationModeKey);
+window.addEventListener("keyup", handleAiTranslationModeKey);
+window.addEventListener("blur", resetAiTranslationModeKey);
 
 watch(
-  () => ({ fileName: fileName.value, rows: rows.value }),
+  () => ({ fileName: fileName.value, jsonPath: jsonPath.value, rows: rows.value }),
   () => {
     queuePersistDraft();
   },
@@ -275,6 +449,14 @@ watch(themeMode, () => {
   syncWindowTheme();
 });
 
+watch(currentLanguage, () => {
+  syncAppLanguageMenu();
+});
+
+watch([errorMessage, statusMessage], ([error, status]) => {
+  messageTimestamp.value = error || status ? formatMessageTimestamp() : "";
+});
+
 watch(
   () => [canUndoTableChange.value, canRedoTableChange.value],
   () => {
@@ -290,7 +472,11 @@ watch(
     String(isCaseSensitiveSearch.value),
     activeStatFilters.value.map(statFilterKey).join("|"),
     selectedSearchColumns.value.join("|"),
-    rows.value.length,
+    searchLengthColumn.value,
+    searchLengthMin.value,
+    searchLengthMax.value,
+    rowFilterStart.value,
+    rowFilterEnd.value,
   ],
   async () => {
     tableScrollTop.value = 0;
@@ -304,9 +490,23 @@ watch(
 
 watch(
   () => rows.value.length,
-  () => {
+  async () => {
     pruneSelectedRows();
+    await nextTick();
+    updateTableViewport();
   },
+);
+
+watch(
+  () => [
+    rows.value,
+    filteredRows.value,
+    Array.from(selectedRowIds.value).join("|"),
+  ],
+  () => {
+    persistSentenceCoverageSource();
+  },
+  { deep: true, immediate: true },
 );
 
 watch(renderedRows, () => {
@@ -325,22 +525,40 @@ onBeforeUnmount(() => {
   rowResizeObservers.forEach((observer) => observer.disconnect());
   rowResizeObservers.clear();
   rowElements.clear();
-  unlistenRefreshFilters?.();
   unlistenOpenGoToRow?.();
   unlistenReadJson?.();
   unlistenSaveJson?.();
+  unlistenSaveJsonAs?.();
   unlistenImportExcel?.();
   unlistenExportExcel?.();
+  unlistenImportSrt?.();
+  unlistenExportSrt?.();
+  unlistenSetLanguage?.();
+  unlistenOpenCharacterStats?.();
+  unlistenOpenLlmSettings?.();
+  unlistenOpenAiTranslation?.();
   unlistenUndoTableChange?.();
   unlistenRedoTableChange?.();
   unlistenClearList?.();
   unlistenDeleteSelected?.();
+  unlistenBulkState?.();
   window.removeEventListener("focus", handleWindowFocus);
   window.removeEventListener("keydown", handleWindowsMenuShortcut);
+  window.removeEventListener("keydown", handleAiTranslationModeKey);
+  window.removeEventListener("keyup", handleAiTranslationModeKey);
+  window.removeEventListener("blur", resetAiTranslationModeKey);
 });
 
-function openFilePicker() {
-  fileInput.value?.click();
+async function openFilePicker() {
+  const path = await openDialog({
+    title: t("main.readJson"),
+    multiple: false,
+    filters: [{ name: "JSON", extensions: ["json"] }],
+  });
+
+  if (typeof path === "string") {
+    await loadJsonFromPath(path);
+  }
 }
 
 function isLinuxPlatform() {
@@ -353,88 +571,55 @@ function isWindowsPlatform() {
 
 function handleWindowFocus() {
   syncHistoryMenuState();
+  syncAppLanguageMenu();
+}
+
+function handleAiTranslationModeKey(event: KeyboardEvent) {
+  isAiTranslationFakeMode.value = event.altKey;
+}
+
+function resetAiTranslationModeKey() {
+  isAiTranslationFakeMode.value = false;
 }
 
 function handleWindowsMenuShortcut(event: KeyboardEvent) {
   if (!isWindowsPlatform()) return;
 
-  const key = event.key.toLowerCase();
-  const hasCtrl = event.ctrlKey;
-  const hasShift = event.shiftKey;
-  const hasAlt = event.altKey;
-  const hasMeta = event.metaKey;
+  const actions: { action: ShortcutAction; run: () => void }[] = [
+    { action: "go_to_row", run: () => openGoToRowDialog() },
+    { action: "read_json", run: () => openFilePicker() },
+    { action: "save_json", run: () => void saveJsonFile() },
+    { action: "save_json_as", run: () => void saveJsonFileAs() },
+    { action: "import_excel", run: () => void openExcelImportDialog() },
+    { action: "export_excel", run: () => void openExcelExportDialog() },
+    { action: "import_srt", run: () => void openSrtImportDialog() },
+    { action: "export_srt", run: () => void openSrtExportDialog() },
+    {
+      action: "open_encoding_manager",
+      run: () => {
+        invoke("open_encoding_manager_window").catch((error) => {
+          console.warn("Failed to open Encoding Manager.", error);
+        });
+      },
+    },
+    { action: "llm_server_settings", run: () => openLlmSettingsDialog() },
+    { action: "ai_translation", run: () => openAiTranslationDialog() },
+    { action: "clear_list", run: () => void clearRows() },
+    { action: "delete_selected", run: () => void deleteSelectedRows() },
+    { action: "bulk_change_state", run: () => openBulkStateDialog() },
+    { action: "character_stats", run: () => openCharacterStatsDialog() },
+    { action: "language_en", run: () => setAppLanguage("en") },
+    { action: "language_zh_hans", run: () => setAppLanguage("zh-Hans") },
+  ];
 
-  if (hasAlt || hasMeta) return;
-
-  if (!hasCtrl && !hasShift && key === "f5") {
+  const match = actions.find(({ action }) => windowsShortcutMatches(event, action));
+  if (match) {
     event.preventDefault();
-    refreshStatSnapshot();
-    return;
-  }
-
-  if (!hasCtrl) return;
-
-  if (!hasShift && key === "g") {
-    event.preventDefault();
-    openGoToRowDialog();
-    return;
-  }
-
-  if (!hasShift && key === "o") {
-    event.preventDefault();
-    openFilePicker();
-    return;
-  }
-
-  if (!hasShift && key === "s") {
-    event.preventDefault();
-    void saveJsonFile();
-    return;
-  }
-
-  if (hasShift && key === "o") {
-    event.preventDefault();
-    void openExcelImportDialog();
-    return;
-  }
-
-  if (hasShift && key === "s") {
-    event.preventDefault();
-    void openExcelExportDialog();
-    return;
-  }
-
-  if (hasShift && key === "e") {
-    event.preventDefault();
-    invoke("open_encoding_manager_window").catch((error) => {
-      console.warn("Failed to open Encoding Manager.", error);
-    });
-    return;
-  }
-
-  if (!hasShift && key === "delete") {
-    event.preventDefault();
-    void deleteSelectedRows();
-    return;
-  }
-
-  if (hasShift && key === "delete") {
-    event.preventDefault();
-    void clearRows();
+    match.run();
   }
 }
 
 function registerMenuListeners() {
-  listen("refresh-filters", () => {
-    refreshStatSnapshot();
-  })
-    .then((unlisten) => {
-      unlistenRefreshFilters = unlisten;
-    })
-    .catch((error) => {
-      console.warn("Failed to register menu listeners.", error);
-    });
-
   listen("open-go-to-row", () => {
     openGoToRowDialog();
   })
@@ -465,6 +650,16 @@ function registerMenuListeners() {
       console.warn("Failed to register save JSON menu listener.", error);
     });
 
+  listen("save-json-as", () => {
+    void saveJsonFileAs();
+  })
+    .then((unlisten) => {
+      unlistenSaveJsonAs = unlisten;
+    })
+    .catch((error) => {
+      console.warn("Failed to register save JSON as menu listener.", error);
+    });
+
   listen("import-excel", () => {
     void openExcelImportDialog();
   })
@@ -483,6 +678,66 @@ function registerMenuListeners() {
     })
     .catch((error) => {
       console.warn("Failed to register export Excel menu listener.", error);
+    });
+
+  listen("import-srt", () => {
+    void openSrtImportDialog();
+  })
+    .then((unlisten) => {
+      unlistenImportSrt = unlisten;
+    })
+    .catch((error) => {
+      console.warn("Failed to register import SRT menu listener.", error);
+    });
+
+  listen("export-srt", () => {
+    void openSrtExportDialog();
+  })
+    .then((unlisten) => {
+      unlistenExportSrt = unlisten;
+    })
+    .catch((error) => {
+      console.warn("Failed to register export SRT menu listener.", error);
+    });
+
+  listen<{ language: AppLanguage }>("set-language", (event) => {
+    setAppLanguage(normalizeAppLanguage(event.payload?.language));
+  })
+    .then((unlisten) => {
+      unlistenSetLanguage = unlisten;
+    })
+    .catch((error) => {
+      console.warn("Failed to register language menu listener.", error);
+    });
+
+  listen("open-character-stats", () => {
+    openCharacterStatsDialog();
+  })
+    .then((unlisten) => {
+      unlistenOpenCharacterStats = unlisten;
+    })
+    .catch((error) => {
+      console.warn("Failed to register character stats menu listener.", error);
+    });
+
+  listen("open-llm-settings", () => {
+    openLlmSettingsDialog();
+  })
+    .then((unlisten) => {
+      unlistenOpenLlmSettings = unlisten;
+    })
+    .catch((error) => {
+      console.warn("Failed to register LLM settings menu listener.", error);
+    });
+
+  listen("open-ai-translation", () => {
+    openAiTranslationDialog();
+  })
+    .then((unlisten) => {
+      unlistenOpenAiTranslation = unlisten;
+    })
+    .catch((error) => {
+      console.warn("Failed to register AI translation menu listener.", error);
     });
 
   listen("undo-table-change", () => {
@@ -524,18 +779,115 @@ function registerMenuListeners() {
     .catch((error) => {
       console.warn("Failed to register delete selected menu listener.", error);
     });
+
+  listen("bulk-change-state", () => {
+    openBulkStateDialog();
+  })
+    .then((unlisten) => {
+      unlistenBulkState = unlisten;
+    })
+    .catch((error) => {
+      console.warn("Failed to register bulk state menu listener.", error);
+    });
+}
+
+type MainDialog =
+  | "aiTranslation"
+  | "aiTranslationSession"
+  | "bulkState"
+  | "characterStats"
+  | "excelExport"
+  | "excelImport"
+  | "goToRow"
+  | "llmSettings"
+  | "srtExport"
+  | "srtImport";
+
+function openMainDialog(dialog: MainDialog) {
+  if (hasActiveMainDialogTask()) {
+    statusMessage.value = t("message.dialogTaskRunning");
+    errorMessage.value = "";
+    return false;
+  }
+
+  closeMainDialogs();
+  if (
+    dialog === "excelExport" ||
+    dialog === "excelImport" ||
+    dialog === "srtExport" ||
+    dialog === "srtImport"
+  ) {
+    errorMessage.value = "";
+    statusMessage.value = "";
+  }
+
+  switch (dialog) {
+    case "aiTranslation":
+      isAiTranslationDialogOpen.value = true;
+      break;
+    case "aiTranslationSession":
+      isAiTranslationSessionDialogOpen.value = true;
+      break;
+    case "bulkState":
+      isBulkStateDialogOpen.value = true;
+      break;
+    case "characterStats":
+      isCharacterStatsDialogOpen.value = true;
+      break;
+    case "excelExport":
+      isExcelExportDialogOpen.value = true;
+      break;
+    case "excelImport":
+      isExcelImportDialogOpen.value = true;
+      break;
+    case "goToRow":
+      isGoToRowDialogOpen.value = true;
+      break;
+    case "llmSettings":
+      isLlmSettingsDialogOpen.value = true;
+      break;
+    case "srtExport":
+      isSrtExportDialogOpen.value = true;
+      break;
+    case "srtImport":
+      isSrtImportDialogOpen.value = true;
+      break;
+  }
+
+  return true;
+}
+
+function closeMainDialogs() {
+  isAiTranslationDialogOpen.value = false;
+  isAiTranslationSessionDialogOpen.value = false;
+  isBulkStateDialogOpen.value = false;
+  isCharacterStatsDialogOpen.value = false;
+  isExcelExportDialogOpen.value = false;
+  isExcelImportDialogOpen.value = false;
+  isSrtExportDialogOpen.value = false;
+  isSrtImportDialogOpen.value = false;
+  isGoToRowDialogOpen.value = false;
+  isLlmSettingsDialogOpen.value = false;
+}
+
+function hasActiveMainDialogTask() {
+  return (
+    isCountingCharacterStats.value ||
+    isExportingExcel.value ||
+    isExportingSrt.value ||
+    isImportingExcel.value ||
+    isImportingSrt.value ||
+    isPreparingAiTranslation.value ||
+    isTestingLlmConnection.value
+  );
 }
 
 async function openGoToRowDialog() {
-  isGoToRowDialogOpen.value = true;
+  openMainDialog("goToRow");
 }
 
 async function openExcelExportDialog() {
-  if (excelExportPath.value.trim() === "") {
-    excelExportPath.value = defaultExcelExportPath();
-  }
-
-  isExcelExportDialogOpen.value = true;
+  openMainDialog("excelExport");
 }
 
 function closeExcelExportDialog() {
@@ -543,11 +895,631 @@ function closeExcelExportDialog() {
 }
 
 async function openExcelImportDialog() {
-  isExcelImportDialogOpen.value = true;
+  openMainDialog("excelImport");
 }
 
 function closeExcelImportDialog() {
   isExcelImportDialogOpen.value = false;
+}
+
+async function openSrtImportDialog() {
+  openMainDialog("srtImport");
+}
+
+function closeSrtImportDialog() {
+  isSrtImportDialogOpen.value = false;
+}
+
+async function openSrtExportDialog() {
+  openMainDialog("srtExport");
+}
+
+function closeSrtExportDialog() {
+  isSrtExportDialogOpen.value = false;
+}
+
+function openCharacterStatsDialog() {
+  openMainDialog("characterStats");
+}
+
+function openLlmSettingsDialog() {
+  if (!openMainDialog("llmSettings")) return;
+  llmSettingsMessage.value = t("common.ready");
+  void refreshStoredLlmApiKeyState();
+}
+
+function closeLlmSettingsDialog() {
+  isLlmSettingsDialogOpen.value = false;
+}
+
+function openAiTranslationDialog() {
+  if (!openMainDialog("aiTranslation")) return;
+  aiTranslationMessage.value = t("common.ready");
+}
+
+function closeAiTranslationDialog() {
+  isAiTranslationDialogOpen.value = false;
+}
+
+function openAiTranslationResultDialog() {
+  if (!aiTranslationSession.value) {
+    aiTranslationMessage.value = t("ai.noResultExists");
+    return;
+  }
+
+  openMainDialog("aiTranslationSession");
+}
+
+function closeAiTranslationSessionDialog() {
+  isAiTranslationSessionDialogOpen.value = false;
+  isAiTranslationDialogOpen.value = true;
+  aiTranslationMessage.value = t("ai.returnedFromResult");
+}
+
+function toggleAiTranslationTaskSelection(taskId: string) {
+  const nextSelectedIds = new Set(selectedAiTranslationTaskIds.value);
+  if (nextSelectedIds.has(taskId)) {
+    nextSelectedIds.delete(taskId);
+  } else {
+    nextSelectedIds.add(taskId);
+  }
+  selectedAiTranslationTaskIds.value = nextSelectedIds;
+}
+
+function selectAllAiTranslationResults() {
+  const result = aiTranslationSession.value;
+  if (!result) return;
+
+  const selectableIds = result.tasks
+    .filter((task) => task.status === "done" || task.status === "warning")
+    .map((task) => task.id);
+  const selectedIds = selectedAiTranslationTaskIds.value;
+  const allSelected =
+    selectableIds.length > 0 && selectableIds.every((taskId) => selectedIds.has(taskId));
+
+  selectedAiTranslationTaskIds.value = allSelected ? new Set() : new Set(selectableIds);
+}
+
+function applySelectedAiTranslationResults() {
+  const result = aiTranslationSession.value;
+  if (!result || selectedAiTranslationTaskIds.value.size === 0) return;
+
+  const selectedIds = selectedAiTranslationTaskIds.value;
+  const nextRows = rows.value.map((row) => ({ ...row }));
+  let appliedCount = 0;
+
+  const nextTasks = result.tasks.map((task) => {
+    if (!selectedIds.has(task.id)) return task;
+    if (task.status !== "done" && task.status !== "warning") return task;
+    const row = nextRows[task.rowIndex];
+    if (!row) return task;
+
+    row.translated_text = task.candidateTranslation;
+    if (task.candidateNote.trim() !== "") {
+      row.note = row.note.trim() === "" ? task.candidateNote : `${row.note}\n${task.candidateNote}`;
+    }
+    if (updateAiTranslationStateOnApply.value) {
+      row.state = "⭕️temp";
+    }
+    appliedCount += 1;
+    return {
+      ...task,
+      status: "applied" as const,
+      message: t("ai.appliedToTable"),
+    };
+  });
+
+  if (appliedCount === 0) {
+    aiTranslationSessionMessage.value = t("ai.noSelectedResultsApplied");
+    return;
+  }
+
+  recordHistoryStep(createTableSnapshot());
+  rows.value = nextRows;
+  aiTranslationSession.value = {
+    ...result,
+    tasks: nextTasks,
+  };
+  selectedAiTranslationTaskIds.value = new Set();
+  markStatSnapshotDirty();
+  aiTranslationSessionMessage.value = updateAiTranslationStateOnApply.value
+    ? `${t("ai.appliedResultsAndTemp")}: ${appliedCount}.`
+    : `${t("ai.appliedResults")}: ${appliedCount}.`;
+  statusMessage.value = aiTranslationSessionMessage.value;
+  errorMessage.value = "";
+}
+
+async function discardAiTranslationSession() {
+  const confirmed = await confirm(t("ai.discardResultConfirm"), {
+    title: t("ai.discardResultTitle"),
+    kind: "warning",
+  });
+
+  if (!confirmed) return;
+
+  aiTranslationSession.value = null;
+  selectedAiTranslationTaskIds.value = new Set();
+  isAiTranslationSessionDialogOpen.value = false;
+  isAiTranslationDialogOpen.value = true;
+  aiTranslationMessage.value = t("message.translationResultDiscarded");
+  statusMessage.value = t("message.translationResultDiscarded");
+  errorMessage.value = "";
+}
+
+function updateAiTranslationSettings(settings: AiTranslationSettings) {
+  aiTranslationSettings.value = sanitizeAiTranslationSettings(settings);
+  persistAiTranslationSettings();
+}
+
+function updateAiTranslationTimeoutSeconds(timeoutSeconds: number) {
+  updateAiTranslationSettings({
+    ...aiTranslationSettings.value,
+    timeoutSeconds,
+  });
+  llmSettingsMessage.value = t("llm.timeoutSaved");
+}
+
+function resetAiTranslationPrompt() {
+  aiTranslationSettings.value = {
+    ...aiTranslationSettings.value,
+    promptTemplate: defaultAiTranslationPrompt(),
+  };
+  persistAiTranslationSettings();
+  aiTranslationMessage.value = t("ai.defaultGamePromptRestored");
+}
+
+function resetAiTranslationVideoPrompt() {
+  aiTranslationSettings.value = {
+    ...aiTranslationSettings.value,
+    promptTemplate: defaultAiTranslationVideoPrompt(),
+  };
+  persistAiTranslationSettings();
+  aiTranslationMessage.value = t("ai.defaultVideoPromptRestored");
+}
+
+async function browseAiTranslationAttachment() {
+  const path = await openDialog({
+    title: t("ai.selectTxtAttachmentTitle"),
+    multiple: false,
+    filters: [{ name: t("dialog.textFile"), extensions: ["txt"] }],
+  });
+
+  if (typeof path === "string") {
+    updateAiTranslationSettings({
+      ...aiTranslationSettings.value,
+      attachmentPath: path,
+    });
+    aiTranslationMessage.value = t("ai.attachmentSelected");
+  }
+}
+
+function clearAiTranslationAttachment() {
+  updateAiTranslationSettings({
+    ...aiTranslationSettings.value,
+    attachmentPath: "",
+  });
+  aiTranslationMessage.value = t("ai.attachmentCleared");
+}
+
+async function translateWithAi() {
+  if (isPreparingAiTranslation.value) return;
+  const useFakeTranslation = isAiTranslationFakeMode.value;
+
+  // Translation results are a review buffer, not immediately applied table
+  // edits. Starting over would discard that buffer, so ask before replacing it.
+  if (aiTranslationSession.value) {
+    const shouldReplace = await confirm(
+      t("ai.replaceResultConfirm"),
+      {
+        title: t("ai.replaceResultTitle"),
+        kind: "warning",
+      },
+    );
+
+    if (!shouldReplace) {
+      aiTranslationMessage.value = t("ai.currentResultKept");
+      return;
+    }
+  }
+
+  // Fake mode is kept as a deterministic test path. Hold Option/Alt in the UI
+  // to exercise the same progress/result workflow without touching the network.
+  if (!useFakeTranslation) {
+    if (llmSettings.value.baseUrl.trim() === "") {
+      aiTranslationMessage.value = t("ai.baseUrlRequired");
+      errorMessage.value = aiTranslationMessage.value;
+      return;
+    }
+    if (llmSettings.value.model.trim() === "") {
+      aiTranslationMessage.value = t("ai.modelRequired");
+      errorMessage.value = aiTranslationMessage.value;
+      return;
+    }
+  }
+
+  let attachmentText = "";
+  try {
+    attachmentText = useFakeTranslation ? "" : await readAiTranslationAttachmentText();
+  } catch (error) {
+    aiTranslationMessage.value = formatError(error, t("ai.failedReadAttachment"));
+    errorMessage.value = aiTranslationMessage.value;
+    statusMessage.value = "";
+    return;
+  }
+
+  isPreparingAiTranslation.value = true;
+  isAiTranslationStopRequested.value = false;
+  aiTranslationCompletedCount.value = 0;
+  aiTranslationErrorCount.value = 0;
+  aiTranslationFinishedText.value = "";
+  aiTranslationFinishedPreview.value = "";
+  aiTranslationMessage.value = useFakeTranslation
+    ? t("ai.startingFakeTranslation")
+    : t("ai.startingAiTranslation");
+  statusMessage.value = aiTranslationMessage.value;
+  errorMessage.value = "";
+  closeMainDialogs();
+  isAiTranslationDialogOpen.value = true;
+
+  // Give the run dialog one frame to paint before doing per-row async work,
+  // otherwise the first visible feedback can feel delayed on slower machines.
+  await nextTick();
+  await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
+
+  try {
+    const tasks = createAiTranslationTasks();
+    const resultTasks: AiTranslationTask[] = [];
+    let wasStopped = false;
+
+    for (const task of tasks) {
+      if (isAiTranslationStopRequested.value) {
+        wasStopped = true;
+        break;
+      }
+
+      aiTranslationCurrentText.value = task.originalText;
+      aiTranslationMessage.value = useFakeTranslation
+        ? `${t("ai.fakeTranslatingRow")} ${task.rowIndex + 1}...`
+        : `${t("ai.translatingRow")} ${task.rowIndex + 1}...`;
+      // aiTranslationFinishedPreview.value = "";
+      await nextTick();
+
+      const translatedTask = useFakeTranslation
+        ? await fakeTranslateTask(task)
+        : await realTranslateTask(task, attachmentText);
+      if (isAiTranslationStopRequested.value) {
+        wasStopped = true;
+        break;
+      }
+
+      resultTasks.push(translatedTask);
+      aiTranslationCompletedCount.value = resultTasks.length;
+      if (translatedTask.status === "error") {
+        aiTranslationErrorCount.value += 1;
+      }
+    }
+
+    // Keep unfinished rows visible in the result view as cancelled tasks so the
+    // user can see exactly where a stop or error left the batch.
+    const resultTaskIds = new Set(resultTasks.map((task) => task.id));
+    const cancelledTasks = tasks
+      .filter((task) => !resultTaskIds.has(task.id))
+      .map((task) => ({
+        ...task,
+        status: "cancelled" as const,
+        message: wasStopped ? t("ai.stoppedBeforeRow") : t("ai.notTranslated"),
+      }));
+    const finalTasks = [...resultTasks, ...cancelledTasks];
+
+    aiTranslationCompletedCount.value = resultTasks.length;
+    aiTranslationSession.value = {
+      id: `result-${Date.now()}`,
+      createdAt: new Date().toISOString(),
+      sourceLanguage: aiTranslationSettings.value.sourceLanguage,
+      targetLanguage: aiTranslationSettings.value.targetLanguage,
+      promptTemplate: aiTranslationSettings.value.promptTemplate,
+      attachmentPath: aiTranslationSettings.value.attachmentPath,
+      tasks: finalTasks,
+    };
+    aiTranslationSessionMessage.value =
+      finalTasks.length === 0
+        ? t("ai.noRowsMatchScope")
+        : wasStopped
+          ? `${t("ai.translationStopped")}: ${resultTasks.length}.`
+          : `${t("ai.translationComplete")}: ${resultTasks.length}.`;
+    aiTranslationMessage.value = aiTranslationSessionMessage.value;
+    statusMessage.value = aiTranslationMessage.value;
+    errorMessage.value = "";
+    if (finalTasks.length > 0) {
+      isPreparingAiTranslation.value = false;
+      openMainDialog("aiTranslationSession");
+    }
+  } catch (error) {
+    aiTranslationMessage.value = formatError(
+      error,
+      t("ai.failedStartTranslation"),
+    );
+    errorMessage.value = aiTranslationMessage.value;
+    statusMessage.value = "";
+  } finally {
+    isPreparingAiTranslation.value = false;
+    aiTranslationFinishedText.value = "";
+    aiTranslationFinishedPreview.value = "";
+    isAiTranslationStopRequested.value = false;
+  }
+}
+
+function createAiTranslationTasks(): AiTranslationTask[] {
+  return aiTranslationRowsWithIndexes().map(({ row, index }) => ({
+    id: `row-${index}-${getRowIdentity(row)}`,
+    rowIndex: index,
+    titleAddr: row.title_addr,
+    fileName: row.file_name,
+    originalText: row.original_text,
+    existingTranslation: row.translated_text,
+    candidateTranslation: "",
+    candidateNote: "",
+    status: "pending",
+    message: t("ai.waitingForTranslation"),
+  }));
+}
+
+async function fakeTranslateTask(task: AiTranslationTask): Promise<AiTranslationTask> {
+  // The split delay intentionally shows a completed preview before moving to
+  // the next row, matching the behavior expected from the real translator.
+  const completedDelay = await waitForAiTranslationStep(400);
+  if (!completedDelay || isAiTranslationStopRequested.value) {
+    return {
+      ...task,
+      status: "cancelled",
+      message: t("ai.fakeStoppedBeforeRow"),
+    };
+  }
+
+  aiTranslationFinishedPreview.value = task.originalText;
+  await nextTick();
+  const completedPreviewDelay = await waitForAiTranslationStep(100);
+  if (!completedPreviewDelay || isAiTranslationStopRequested.value) {
+    return {
+      ...task,
+      status: "cancelled",
+      message: t("ai.fakeStoppedBeforeRow"),
+    };
+  }
+
+  return {
+    ...task,
+    candidateTranslation: task.originalText,
+    candidateNote: t("ai.simulatedTranslationNote"),
+    status: "done",
+    message: t("ai.simulatedTranslationComplete"),
+  };
+}
+
+async function realTranslateTask(
+  task: AiTranslationTask,
+  attachmentText: string,
+): Promise<AiTranslationTask> {
+  try {
+    // The backend returns raw model content on parse problems so the Candidate
+    // column can be used to debug prompt/JSON issues.
+    const result = await invoke<{
+      note: string;
+      rawContent: string;
+      translatedText: string;
+    }>("translate_with_llm", {
+      request: {
+        settings: {
+          ...llmSettings.value,
+          timeoutSeconds: aiTranslationSettings.value.timeoutSeconds,
+        },
+        apiKeyOverride: llmApiKeyInput.value,
+        prompt: buildAiTranslationPrompt(task, attachmentText),
+        temperature: aiTranslationSettings.value.temperature,
+      },
+    });
+
+    const candidateTranslation = result.translatedText;
+    aiTranslationFinishedText.value = task.originalText;
+    aiTranslationFinishedPreview.value = candidateTranslation;
+    await nextTick();
+
+    return {
+      ...task,
+      candidateTranslation,
+      candidateNote: result.note,
+      status: result.note.trim() === "" ? "done" : "warning",
+      message: result.note.trim() === "" ? t("ai.requestComplete") : result.note,
+    };
+  } catch (error) {
+    const message = formatError(error, t("ai.requestFailed"));
+    aiTranslationFinishedText.value = task.originalText;
+    aiTranslationFinishedPreview.value = message;
+    await nextTick();
+    return {
+      ...task,
+      candidateTranslation: "",
+      candidateNote: "",
+      status: "error",
+      message,
+    };
+  }
+}
+
+async function readAiTranslationAttachmentText() {
+  const path = aiTranslationSettings.value.attachmentPath.trim();
+  if (path === "") return "";
+
+  const bytes = await readFile(path);
+  return decodeTextAuto(bytes).trim();
+}
+
+function buildAiTranslationPrompt(task: AiTranslationTask, attachmentText = "") {
+  const settings = aiTranslationSettings.value;
+  const row = rows.value[task.rowIndex];
+  const replacements: Record<string, string> = {
+    attachment_text: attachmentText,
+    existing_translation: task.existingTranslation,
+    file_name: task.fileName,
+    nearby_rows: nearbyRowsForPrompt(task.rowIndex),
+    note: row?.note ?? "",
+    original_text: task.originalText,
+    source_language: settings.sourceLanguage,
+    state: row?.state ?? "",
+    target_language: settings.targetLanguage,
+    title_addr: task.titleAddr,
+    translated_text: task.existingTranslation,
+  };
+
+  return settings.promptTemplate.replace(/\{([a-z_]+)\}/g, (match, key: string) =>
+    Object.prototype.hasOwnProperty.call(replacements, key) ? replacements[key] : match,
+  );
+}
+
+function nearbyRowsForPrompt(rowIndex: number) {
+  const start = Math.max(0, rowIndex - 2);
+  const end = Math.min(rows.value.length, rowIndex + 3);
+  return rows.value
+    .slice(start, end)
+    .map((row, offset) => {
+      const index = start + offset;
+      return [
+        `row ${index + 1}${index === rowIndex ? " (current)" : ""}`,
+        `original: ${row.original_text}`,
+        `translation: ${row.translated_text}`,
+      ].join("\n");
+    })
+    .join("\n\n");
+}
+
+function wait(milliseconds: number) {
+  return new Promise<void>((resolve) => {
+    window.setTimeout(resolve, milliseconds);
+  });
+}
+
+async function waitForAiTranslationStep(milliseconds: number) {
+  const deadline = Date.now() + milliseconds;
+  while (Date.now() < deadline) {
+    if (isAiTranslationStopRequested.value) return false;
+    await wait(Math.min(50, deadline - Date.now()));
+  }
+  return true;
+}
+
+function stopAiTranslationRun() {
+  isAiTranslationStopRequested.value = true;
+  aiTranslationMessage.value = t("ai.stoppingTranslation");
+}
+
+function updateLlmSettings(settings: LlmServerSettings) {
+  llmSettings.value = sanitizeLlmSettings(settings);
+  persistLlmSettings();
+  statusMessage.value = t("message.llmSettingsSaved");
+  errorMessage.value = "";
+}
+
+function updateLlmApiKeyInput(value: string) {
+  llmApiKeyInput.value = value;
+}
+
+async function saveLlmApiKey() {
+  const apiKey = llmApiKeyInput.value.trim();
+  if (apiKey === "") {
+    llmSettingsMessage.value = t("llm.enterApiKeyBeforeSaving");
+    return;
+  }
+
+  try {
+    await invoke("save_llm_api_key", { apiKey });
+    llmApiKeyInput.value = "";
+    hasStoredLlmApiKey.value = true;
+    llmSettingsMessage.value = t("llm.apiKeySavedCredential");
+    statusMessage.value = t("message.llmApiKeySaved");
+    errorMessage.value = "";
+  } catch (error) {
+    llmSettingsMessage.value = formatError(error, t("llm.failedSaveApiKey"));
+  }
+}
+
+async function clearLlmApiKey() {
+  try {
+    await invoke("delete_llm_api_key");
+    llmApiKeyInput.value = "";
+    hasStoredLlmApiKey.value = false;
+    llmSettingsMessage.value = t("llm.apiKeyCleared");
+    statusMessage.value = t("message.llmApiKeyCleared");
+    errorMessage.value = "";
+  } catch (error) {
+    llmSettingsMessage.value = formatError(error, t("llm.failedClearApiKey"));
+  }
+}
+
+function resetLlmSettings() {
+  llmSettings.value = defaultLlmSettings();
+  persistLlmSettings();
+  llmApiKeyInput.value = "";
+  llmSettingsMessage.value = t("llm.settingsResetApiKeyUnchanged");
+  statusMessage.value = t("message.llmSettingsReset");
+  errorMessage.value = "";
+}
+
+async function testLlmConnection() {
+  if (isTestingLlmConnection.value) return;
+
+  isTestingLlmConnection.value = true;
+  llmSettingsMessage.value = t("llm.testingConnection");
+  try {
+    const result = await invoke<{ ok: boolean; message: string }>("test_llm_connection", {
+      settings: {
+        ...llmSettings.value,
+        timeoutSeconds: aiTranslationSettings.value.timeoutSeconds,
+      },
+      apiKeyOverride: llmApiKeyInput.value,
+    });
+    const resultMessage = localizedLlmConnectionMessage(result);
+    llmSettingsMessage.value = resultMessage;
+    if (result.ok) {
+      statusMessage.value = resultMessage;
+      errorMessage.value = "";
+    }
+  } catch (error) {
+    llmSettingsMessage.value = formatError(error, t("llm.failedTestConnection"));
+  } finally {
+    isTestingLlmConnection.value = false;
+  }
+}
+
+function localizedLlmConnectionMessage(result: { ok: boolean; message: string }) {
+  if (!result.ok) return result.message;
+
+  // The Rust command returns English diagnostic text because failures often
+  // include server bodies. Only the known success form is localized here.
+  const prefix = "Connection succeeded: ";
+  const unvalidatedSuffix = ". Model name was not validated yet.";
+  if (!result.message.startsWith(prefix)) return result.message;
+
+  const hasUnvalidatedSuffix = result.message.endsWith(unvalidatedSuffix);
+  const url = result.message
+    .slice(prefix.length, hasUnvalidatedSuffix ? -unvalidatedSuffix.length : undefined)
+    .trim()
+    .replace(/\.$/, "");
+  if (!url) return result.message;
+
+  const modelNote = hasUnvalidatedSuffix ? ` ${t("llm.modelNameNotValidated")}` : "";
+  return `${t("llm.connectionSucceeded")}: ${url}.${modelNote}`;
+}
+
+async function refreshStoredLlmApiKeyState() {
+  try {
+    hasStoredLlmApiKey.value = await invoke<boolean>("has_llm_api_key");
+  } catch (error) {
+    llmSettingsMessage.value = formatError(error, t("llm.failedReadApiKeyState"));
+  }
+}
+
+function closeCharacterStatsDialog() {
+  isCharacterStatsDialogOpen.value = false;
 }
 
 function closeGoToRowDialog() {
@@ -563,6 +1535,7 @@ async function confirmGoToRowDialog() {
 function createTableSnapshot() {
   const snapshot: TableSnapshot = {
     fileName: fileName.value,
+    jsonPath: jsonPath.value,
     rows: rows.value,
   };
 
@@ -571,18 +1544,84 @@ function createTableSnapshot() {
 
 function restoreTableSnapshot(snapshot: string) {
   const parsed = JSON.parse(snapshot) as TableSnapshot;
+  const scrollAnchor = captureTableScrollAnchor();
 
-  rows.value = parsed.rows.map(normalizeStoredRow);
+  rows.value = restoreRowsPreservingObjects(parsed.rows.map(normalizeStoredRow));
   fileName.value = toText(parsed.fileName);
+  jsonPath.value = toText(parsed.jsonPath);
   pendingDeleteIndex.value = null;
   pendingEditSnapshot = null;
   clearSelectedRows();
-  resetVirtualRowState();
-  refreshStatSnapshot();
-  tableScrollTop.value = 0;
-  if (tableWrap.value) {
-    tableWrap.value.scrollTop = 0;
+  pruneVirtualRowState();
+  refreshStatSnapshot(false);
+  restoreTableScrollAnchor(scrollAnchor);
+}
+
+type TableScrollAnchor = {
+  filteredIndex: number;
+  occurrence: number;
+  offset: number;
+  scrollTop: number;
+  signature: string;
+};
+
+function restoreRowsPreservingObjects(nextRows: SentenceRow[]) {
+  const existingRows = new Map<string, SentenceRow[]>();
+
+  for (const row of rows.value) {
+    const signature = sentenceRowSignature(row);
+    existingRows.set(signature, [...(existingRows.get(signature) ?? []), row]);
   }
+
+  return nextRows.map((nextRow) => {
+    const signature = sentenceRowSignature(nextRow);
+    const reusableRows = existingRows.get(signature);
+    const reusableRow = reusableRows?.shift();
+
+    if (!reusableRow) return nextRow;
+    Object.assign(reusableRow, nextRow);
+    return reusableRow;
+  });
+}
+
+function sentenceRowSignature(row: SentenceRow) {
+  return JSON.stringify([
+    row.title_addr,
+    row.original_text,
+    row.translated_text,
+    row.note,
+    row.state,
+    row.file_name,
+  ]);
+}
+
+function captureTableScrollAnchor(): TableScrollAnchor | null {
+  const items = filteredRows.value;
+  const scrollTop = tableWrap.value?.scrollTop ?? tableScrollTop.value;
+  if (items.length === 0) return null;
+
+  let offsetTop = 0;
+  let filteredIndex = 0;
+  while (filteredIndex < items.length) {
+    const height = rowHeight(items[filteredIndex].row);
+    if (offsetTop + height > scrollTop) break;
+    offsetTop += height;
+    filteredIndex += 1;
+  }
+
+  const boundedIndex = Math.min(filteredIndex, items.length - 1);
+  const signature = sentenceRowSignature(items[boundedIndex].row);
+  const occurrence = items
+    .slice(0, boundedIndex)
+    .filter(({ row }) => sentenceRowSignature(row) === signature).length;
+
+  return {
+    filteredIndex: boundedIndex,
+    occurrence,
+    offset: Math.max(0, scrollTop - offsetTop),
+    scrollTop,
+    signature,
+  };
 }
 
 function pushHistorySnapshot(stack: string[], snapshot: string) {
@@ -620,7 +1659,7 @@ function undoTableChange() {
   undoStack.value = undoStack.value.slice(0, -1);
   redoStack.value = pushHistorySnapshot(redoStack.value, currentSnapshot);
   restoreTableSnapshot(snapshot);
-  statusMessage.value = "Undid table change.";
+  statusMessage.value = t("message.undidTableChange");
 }
 
 function redoTableChange() {
@@ -632,7 +1671,7 @@ function redoTableChange() {
   redoStack.value = redoStack.value.slice(0, -1);
   undoStack.value = pushHistorySnapshot(undoStack.value, currentSnapshot);
   restoreTableSnapshot(snapshot);
-  statusMessage.value = "Redid table change.";
+  statusMessage.value = t("message.redidTableChange");
 }
 
 function beginTableEdit() {
@@ -654,33 +1693,67 @@ function commitSelectEdit() {
 async function saveJsonFile() {
   if (!canSaveJson.value) return;
 
+  if (jsonPath.value.trim() === "") {
+    await saveJsonFileAs();
+    return;
+  }
+
+  try {
+    errorMessage.value = "";
+    statusMessage.value = "";
+    isSaving.value = true;
+
+    await writeTextFile(jsonPath.value, serializeRows());
+    statusMessage.value = t("message.jsonSaved");
+  } catch (error) {
+    errorMessage.value = formatError(error, t("message.failedSaveJson"));
+  } finally {
+    isSaving.value = false;
+  }
+}
+
+async function saveJsonFileAs() {
+  if (!canSaveJson.value) return;
+
   try {
     errorMessage.value = "";
     statusMessage.value = "";
     isSaving.value = true;
 
     const path = await save({
-      title: "Save JSON",
-      defaultPath: fileName.value || "sentences.json",
+      title: t("main.saveJsonAs"),
+      defaultPath: jsonPath.value.trim() || defaultJsonSavePath(),
       filters: [{ name: "JSON", extensions: ["json"] }],
     });
 
     if (!path) return;
 
-    await writeTextFile(path, serializeRows());
-    statusMessage.value = "JSON saved.";
+    const nextPath = ensureJsonExtension(path);
+    await writeTextFile(nextPath, serializeRows());
+    jsonPath.value = nextPath;
+    fileName.value = pathBaseName(nextPath);
+    statusMessage.value = t("message.jsonSaved");
   } catch (error) {
-    errorMessage.value = formatError(error, "Failed to save JSON file.");
+    errorMessage.value = formatError(error, t("message.failedSaveJson"));
   } finally {
     isSaving.value = false;
   }
 }
 
+function ensureJsonExtension(path: string) {
+  return /\.json$/i.test(path) ? path : `${path}.json`;
+}
+
+function defaultJsonSavePath() {
+  const baseName = fileName.value.replace(/\.[^.]+$/, "") || "sentences";
+  return `${baseName}.json`;
+}
+
 async function browseExcelImportPath() {
   const path = await openDialog({
-    title: "Import Excel",
+    title: t("dialog.importExcel"),
     multiple: false,
-    filters: [{ name: "Excel Workbook", extensions: ["xlsx"] }],
+    filters: [{ name: t("dialog.excelWorkbook"), extensions: ["xlsx"] }],
   });
 
   if (typeof path === "string") {
@@ -692,33 +1765,44 @@ async function confirmExcelImport() {
   if (!canImportExcel.value) return;
 
   try {
+    if (!excelImportAppendRows.value && !(await confirmImportOverwrite(t("dialog.importExcel")))) {
+      return;
+    }
+
     errorMessage.value = "";
     statusMessage.value = "";
     isImportingExcel.value = true;
 
     const importedRows = await rowsFromExcelImport();
     if (importedRows.length === 0) {
-      throw new Error("No valid rows were found in the selected Excel file.");
+      throw new Error(t("message.noValidExcelRows"));
     }
 
     recordCurrentStateForUndo();
-    rows.value = importedRows;
-    fileName.value = excelImportPath.value.split(/[\\/]/).pop() ?? "Imported Excel";
+    rows.value = excelImportAppendRows.value
+      ? [...rows.value, ...importedRows]
+      : importedRows;
+    if (!excelImportAppendRows.value) {
+      fileName.value = excelImportPath.value.split(/[\\/]/).pop() ?? t("message.importedExcelFileName");
+      jsonPath.value = "";
+    }
     clearSelectedRows();
     pendingDeleteIndex.value = null;
     resetVirtualRowState();
     refreshStatSnapshot();
     closeExcelImportDialog();
-    statusMessage.value = `Excel imported: ${importedRows.length} row${importedRows.length === 1 ? "" : "s"}.`;
+    statusMessage.value = excelImportAppendRows.value
+      ? `${t("message.excelAppended")}: ${importedRows.length} ${t("message.rows")}.`
+      : `${t("message.excelImported")}: ${importedRows.length} ${t("message.rows")}.`;
   } catch (error) {
-    errorMessage.value = formatError(error, "Failed to import Excel file.");
+    errorMessage.value = formatError(error, t("message.failedImportExcel"));
   } finally {
     isImportingExcel.value = false;
   }
 }
 
 async function rowsFromExcelImport() {
-  const startRow = requiredPositiveInteger(excelImportStartRow.value, "Start row");
+  const startRow = requiredPositiveInteger(excelImportStartRow.value, t("dialog.startRow"));
   const titleColumn = optionalPositiveInteger(
     excelImportTitleColumn.value,
     "title_addr column",
@@ -787,6 +1871,223 @@ async function rowsFromExcelImport() {
   return outputRows;
 }
 
+async function browseSrtImportPath() {
+  const path = await openDialog({
+    title: t("dialog.importSrt"),
+    multiple: false,
+    filters: [{ name: t("dialog.srtSubtitle"), extensions: ["srt"] }],
+  });
+
+  if (typeof path === "string") {
+    srtImportPath.value = path;
+  }
+}
+
+async function confirmSrtImport() {
+  if (!canImportSrt.value) return;
+
+  try {
+    if (!srtImportAppendRows.value && !(await confirmImportOverwrite(t("dialog.importSrt")))) {
+      return;
+    }
+
+    errorMessage.value = "";
+    statusMessage.value = "";
+    isImportingSrt.value = true;
+
+    const text = decodeTextAuto(await readFile(srtImportPath.value.trim()));
+    const importedRows = rowsFromSrt(text);
+    if (importedRows.length === 0) {
+      throw new Error(t("message.noValidSrtRows"));
+    }
+
+    recordCurrentStateForUndo();
+    rows.value = srtImportAppendRows.value ? [...rows.value, ...importedRows] : importedRows;
+    if (!srtImportAppendRows.value) {
+      fileName.value = pathBaseName(srtImportPath.value);
+      jsonPath.value = "";
+    }
+    clearSelectedRows();
+    pendingDeleteIndex.value = null;
+    resetVirtualRowState();
+    refreshStatSnapshot();
+    closeSrtImportDialog();
+    statusMessage.value = srtImportAppendRows.value
+      ? `${t("message.srtAppended")}: ${importedRows.length} ${t("message.rows")}.`
+      : `${t("message.srtImported")}: ${importedRows.length} ${t("message.rows")}.`;
+  } catch (error) {
+    errorMessage.value = formatError(error, t("message.failedImportSrt"));
+  } finally {
+    isImportingSrt.value = false;
+  }
+}
+
+function rowsFromSrt(text: string): SentenceRow[] {
+  const normalizedText = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n").trim();
+  if (normalizedText === "") return [];
+
+  const timePattern = /^\s*\d{2}:\d{2}:\d{2},\d{3}\s*-->\s*\d{2}:\d{2}:\d{2},\d{3}.*$/;
+  return normalizedText
+    .split(/\n\s*\n/)
+    .flatMap((block) => {
+      const lines = block.split("\n");
+      const timeIndex = lines.findIndex((line) => timePattern.test(line));
+      if (timeIndex < 0) return [];
+
+      const timeline = lines[timeIndex].trim();
+      const subtitle = lines.slice(timeIndex + 1).join("\n").trim();
+      return [
+        {
+          title_addr: timeline,
+          original_text: subtitle,
+          translated_text: subtitle,
+          note: "",
+          state: "❓unmarked" as StateValue,
+          file_name: "",
+        },
+      ];
+    });
+}
+
+function decodeTextAuto(bytes: Uint8Array) {
+  if (bytes[0] === 0xff && bytes[1] === 0xfe) {
+    return new TextDecoder("utf-16le").decode(bytes.subarray(2));
+  }
+  if (bytes[0] === 0xfe && bytes[1] === 0xff) {
+    return new TextDecoder("utf-16be").decode(bytes.subarray(2));
+  }
+  if (bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) {
+    return new TextDecoder("utf-8").decode(bytes.subarray(3));
+  }
+
+  for (const encoding of ["utf-8", "shift_jis", "euc-kr", "gb18030", "big5"]) {
+    try {
+      return new TextDecoder(encoding, { fatal: true }).decode(bytes);
+    } catch {
+      // Try the next likely subtitle encoding.
+    }
+  }
+
+  return new TextDecoder("utf-8").decode(bytes);
+}
+
+function defaultSrtExportPath() {
+  const baseName = fileName.value.replace(/\.[^.]+$/, "") || "sentences";
+  return `${baseName}.srt`;
+}
+
+async function browseSrtExportPath() {
+  const path = await save({
+    title: t("dialog.exportSrt"),
+    defaultPath: srtExportPath.value.trim() || defaultSrtExportPath(),
+    filters: [{ name: t("dialog.srtSubtitle"), extensions: ["srt"] }],
+  });
+
+  if (path) {
+    srtExportPath.value = ensureSrtExtension(path);
+  }
+}
+
+async function confirmSrtExport() {
+  if (!canExportSrt.value) return;
+
+  try {
+    errorMessage.value = "";
+    statusMessage.value = "";
+    isExportingSrt.value = true;
+
+    const exportRows = rowsForSrtExport();
+    if (exportRows.length === 0) {
+      throw new Error(t("message.noRowsToExport"));
+    }
+
+    const path = ensureSrtExtension(srtExportPath.value.trim());
+    await writeFile(
+      path,
+      encodeSrtText(
+        buildSrtText(exportRows),
+        srtExportEncoding.value,
+      ),
+    );
+
+    srtExportPath.value = path;
+    closeSrtExportDialog();
+    statusMessage.value = `${t("message.srtExported")}: ${exportRows.length} ${t("message.rows")}.`;
+  } catch (error) {
+    errorMessage.value = formatError(error, t("message.failedExportSrt"));
+  } finally {
+    isExportingSrt.value = false;
+  }
+}
+
+function rowsForSrtExport() {
+  if (srtExportFilteredOnly.value) {
+    return filteredRows.value.map(({ row }) => row);
+  }
+
+  return rows.value;
+}
+
+function buildSrtText(exportRows: SentenceRow[]) {
+  let subtitleIndex = 1;
+  const blocks = exportRows.flatMap((row) => {
+    const timeline = row.title_addr.trim();
+    if (timeline === "") return [];
+
+    const original = row.original_text.trim();
+    const translated = row.translated_text.trim();
+    const subtitle = srtExportBilingual.value
+      ? [translated, original].filter((line) => line !== "").join("\n")
+      : translated || original;
+
+    const block = `${subtitleIndex}\n${timeline}\n${subtitle}`;
+    subtitleIndex += 1;
+    return [block];
+  });
+
+  return blocks.length === 0 ? "" : `${blocks.join("\n\n")}\n`;
+}
+
+function encodeSrtText(text: string, encoding: SrtExportEncoding) {
+  if (encoding === "utf-16" || encoding === "utf-16-le") {
+    return encodeUtf16(text, true, encoding === "utf-16");
+  }
+  if (encoding === "utf-16-be") {
+    return encodeUtf16(text, false, true);
+  }
+
+  const encoded = new TextEncoder().encode(text);
+  if (encoding === "utf-8-sig") {
+    const output = new Uint8Array(encoded.length + 3);
+    output.set([0xef, 0xbb, 0xbf], 0);
+    output.set(encoded, 3);
+    return output;
+  }
+  return encoded;
+}
+
+function encodeUtf16(text: string, littleEndian: boolean, withBom: boolean) {
+  const bomLength = withBom ? 2 : 0;
+  const output = new Uint8Array(text.length * 2 + bomLength);
+  if (withBom) {
+    output[0] = littleEndian ? 0xff : 0xfe;
+    output[1] = littleEndian ? 0xfe : 0xff;
+  }
+
+  for (let index = 0; index < text.length; index += 1) {
+    const code = text.charCodeAt(index);
+    const offset = bomLength + index * 2;
+    output[offset] = littleEndian ? code & 0xff : code >> 8;
+    output[offset + 1] = littleEndian ? code >> 8 : code & 0xff;
+  }
+
+  return output;
+}
+
+function ensureSrtExtension(path: string) {
+  return /\.srt$/i.test(path) ? path : `${path}.srt`;
+}
+
 function defaultExcelExportPath() {
   const baseName = fileName.value.replace(/\.[^.]+$/, "") || "sentences";
   return `${baseName}.xlsx`;
@@ -794,9 +2095,9 @@ function defaultExcelExportPath() {
 
 async function browseExcelExportPath() {
   const path = await save({
-    title: "Export Excel",
+    title: t("dialog.exportExcel"),
     defaultPath: excelExportPath.value.trim() || defaultExcelExportPath(),
-    filters: [{ name: "Excel Workbook", extensions: ["xlsx"] }],
+    filters: [{ name: t("dialog.excelWorkbook"), extensions: ["xlsx"] }],
   });
 
   if (path) {
@@ -814,7 +2115,7 @@ async function confirmExcelExport() {
 
     const exportRows = rowsForExcelExport();
     if (exportRows.length === 0) {
-      throw new Error("There are no rows to export.");
+      throw new Error(t("message.noRowsToExport"));
     }
 
     const path = ensureXlsxExtension(excelExportPath.value.trim());
@@ -833,9 +2134,9 @@ async function confirmExcelExport() {
 
     excelExportPath.value = path;
     closeExcelExportDialog();
-    statusMessage.value = `Excel exported: ${exportRows.length} row${exportRows.length === 1 ? "" : "s"}.`;
+    statusMessage.value = `${t("message.excelExported")}: ${exportRows.length} ${t("message.rows")}.`;
   } catch (error) {
-    errorMessage.value = formatError(error, "Failed to export Excel file.");
+    errorMessage.value = formatError(error, t("message.failedExportExcel"));
   } finally {
     isExportingExcel.value = false;
   }
@@ -849,37 +2150,282 @@ function rowsForExcelExport() {
   return rows.value.map((row, index) => ({ row, index }));
 }
 
-async function loadJsonFile(event: Event) {
-  const input = event.target as HTMLInputElement;
-  const file = input.files?.[0];
-  if (!file) return;
+function characterStatsRows() {
+  if (characterStatsScope.value === "filtered") {
+    return filteredRows.value.map(({ row }) => row);
+  }
+
+  if (characterStatsScope.value === "selected") {
+    return rows.value.filter((row) => selectedRowIds.value.has(getRowIdentity(row)));
+  }
+
+  return rows.value;
+}
+
+function aiTranslationRows() {
+  return aiTranslationRowsWithIndexes().map(({ row }) => row);
+}
+
+function aiTranslationRowsWithIndexes() {
+  const sourceRows = (() => {
+    switch (aiTranslationSettings.value.scope) {
+    case "selected":
+      return rows.value
+        .map((row, index) => ({ row, index }))
+        .filter(({ row }) => selectedRowIds.value.has(getRowIdentity(row)));
+    case "filtered":
+      return filteredRows.value.map(({ row, index }) => ({ row, index }));
+    case "all":
+      return rows.value.map((row, index) => ({ row, index }));
+    }
+  })();
+
+  const minimumCharacters = Math.max(
+    0,
+    Math.floor(aiTranslationSettings.value.minOriginalCharacters),
+  );
+  return sourceRows.filter(
+    ({ row }) => originalCharacterCount(row.original_text) >= minimumCharacters,
+  );
+}
+
+function originalCharacterCount(value: string) {
+  return Array.from(value.trim()).length;
+}
+
+function persistSentenceCoverageSource() {
+  const rowForCoverage = (row: SentenceRow, index: number) => ({
+    index,
+    translated_text: row.translated_text,
+  });
+
+  const source = {
+    all: rows.value.map(rowForCoverage),
+    filtered: filteredRows.value.map(({ row, index }) => rowForCoverage(row, index)),
+    selected: rows.value
+      .map((row, index) => ({ row, index }))
+      .filter(({ row }) => selectedRowIds.value.has(getRowIdentity(row)))
+      .map(({ row, index }) => rowForCoverage(row, index)),
+  };
+
+  invoke("set_sentence_coverage_source", { source }).catch((error) => {
+    console.warn("Failed to persist sentence coverage source.", error);
+  });
+}
+
+async function runCharacterStats() {
+  if (isCountingCharacterStats.value) return;
+
+  isCountingCharacterStats.value = true;
+  characterStatsProgress.value = 0;
+  characterStatsMessage.value = t("stats.countingCharacters");
+  errorMessage.value = "";
+  await nextTick();
+
+  const counts = new Map<string, number>();
+  const sourceRows = characterStatsRows();
+  const totalCharacters = sourceRows.reduce(
+    (total, row) => total + row.translated_text.length,
+    0,
+  );
+  let scannedCharacters = 0;
 
   try {
+    for (let rowIndex = 0; rowIndex < sourceRows.length; rowIndex += 1) {
+      const row = sourceRows[rowIndex];
+      for (const token of characterStatsTokens(row.translated_text)) {
+        counts.set(token, (counts.get(token) ?? 0) + 1);
+      }
+
+      scannedCharacters += row.translated_text.length;
+      if (rowIndex % 120 === 0 || rowIndex === sourceRows.length - 1) {
+        characterStatsProgress.value =
+          totalCharacters === 0
+            ? 100
+            : Math.round((scannedCharacters / totalCharacters) * 100);
+        await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
+      }
+    }
+
+    const sortedRows = Array.from(counts.entries()).sort(([charA, countA], [charB, countB]) => {
+      const countDelta =
+        characterStatsSortOrder.value === "asc" ? countA - countB : countB - countA;
+      if (countDelta !== 0) return countDelta;
+      return charA.localeCompare(charB);
+    });
+
+    characterStatsResult.value = sortedRows
+      .map(([character, count]) => `${displayCharacterStatsToken(character)}\t${count}`)
+      .join("\n");
+
+    characterStatsMessage.value =
+      sortedRows.length === 0
+        ? `${t("message.noMatchingCharactersFound")}: ${sourceRows.length} ${t("message.rows")}.`
+        : `${t("message.countedItemsFromRows")}: ${sortedRows.length} / ${sourceRows.length} ${t("message.rows")}.`;
+    statusMessage.value = characterStatsMessage.value;
+  } finally {
+    characterStatsProgress.value = 100;
+    isCountingCharacterStats.value = false;
+  }
+}
+
+function characterStatsTokens(text: string) {
+  const tokens: string[] = [];
+  let index = 0;
+
+  while (index < text.length) {
+    const bracketToken = bracketedTokenAt(text, index);
+
+    if (bracketToken) {
+      if (characterStatsIncludeAll.value || characterStatsTypes.value.includes("token")) {
+        tokens.push(bracketToken.token);
+      }
+      index = bracketToken.endIndex;
+      continue;
+    }
+
+    const character = Array.from(text.slice(index))[0] ?? "";
+    index += character.length;
+    if (characterStatsIgnoreWhitespace.value && /\s/u.test(character)) continue;
+    if (characterMatchesStatsType(character)) {
+      tokens.push(character);
+    }
+  }
+
+  return tokens;
+}
+
+function bracketedTokenAt(text: string, startIndex: number) {
+  const pairs: Record<string, { close: string; type: "square" | "curly" | "angle" }> = {
+    "[": { close: "]", type: "square" },
+    "{": { close: "}", type: "curly" },
+    "<": { close: ">", type: "angle" },
+  };
+  const open = text[startIndex];
+  const pair = pairs[open];
+  if (!pair || !characterStatsBracketTokenTypes.value.includes(pair.type)) return null;
+
+  const endIndex = text.indexOf(pair.close, startIndex + 1);
+  if (endIndex === -1) return null;
+
+  return {
+    endIndex: endIndex + pair.close.length,
+    token: text.slice(startIndex, endIndex + pair.close.length),
+  };
+}
+
+function characterMatchesStatsType(character: string) {
+  if (characterStatsIncludeAll.value) return true;
+  const selectedTypes = characterStatsTypes.value;
+  if (selectedTypes.length === 0) return false;
+
+  return selectedTypes.some((type) => characterMatchesSingleStatsType(character, type));
+}
+
+function characterMatchesSingleStatsType(
+  character: string,
+  type: "western" | "han" | "kana" | "hangul" | "fullwidth" | "halfwidth" | "token",
+) {
+  switch (type) {
+    case "western":
+      return /\p{Script=Latin}/u.test(character);
+    case "han":
+      return /\p{Script=Han}/u.test(character);
+    case "kana":
+      return /[\p{Script=Hiragana}\p{Script=Katakana}]/u.test(character);
+    case "hangul":
+      return /\p{Script=Hangul}/u.test(character);
+    case "fullwidth":
+      return /[\uFF10-\uFF19\uFF01-\uFF0F\uFF1A-\uFF20\uFF3B-\uFF40\uFF5B-\uFF65]/u.test(
+        character,
+      );
+    case "halfwidth":
+      return /[0-9!-\/:-@[-`{-~]/u.test(character);
+    case "token":
+      return false;
+  }
+}
+
+function displayCharacterStatsToken(token: string) {
+  if (token === " ") return " ";
+  if (token === "\t") return "\\t";
+  if (token === "\r") return "\\r";
+  if (token === "\n") return "\\n";
+  return token;
+}
+
+async function copyCharacterStatsResult() {
+  if (characterStatsResult.value === "") return;
+
+  try {
+    await copyText(characterStatsResult.value);
+    characterStatsMessage.value = t("message.characterCountCopied");
+    statusMessage.value = characterStatsMessage.value;
     errorMessage.value = "";
-    const text = await file.text();
+  } catch (error) {
+    errorMessage.value = formatError(error, t("message.failedCopyCharacterCount"));
+    statusMessage.value = "";
+  }
+}
+
+async function copyText(text: string) {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.style.position = "fixed";
+  textarea.style.left = "-9999px";
+  document.body.append(textarea);
+  textarea.select();
+  const copied = document.execCommand("copy");
+  textarea.remove();
+  if (!copied) {
+    throw new Error(t("message.clipboardUnavailable"));
+  }
+}
+
+async function loadJsonFromPath(path: string) {
+  try {
+    if (!(await confirmImportOverwrite(t("main.readJson")))) return;
+
+    errorMessage.value = "";
+    const text = new TextDecoder("utf-8").decode(await readFile(path));
     const parsed = JSON.parse(text) as unknown;
 
     if (!Array.isArray(parsed)) {
-      throw new Error("JSON root must be an array.");
+      throw new Error(t("message.jsonRootMustBeArray"));
     }
 
     recordCurrentStateForUndo();
     rows.value = parsed.map(normalizeSentence);
     clearSelectedRows();
-    fileName.value = file.name;
+    jsonPath.value = path;
+    fileName.value = pathBaseName(path);
     refreshStatSnapshot();
-    statusMessage.value = "Loaded and auto-saved.";
+    statusMessage.value = t("message.loadedAndAutoSaved");
   } catch (error) {
-    recordCurrentStateForUndo();
-    rows.value = [];
-    clearSelectedRows();
-    fileName.value = "";
-    refreshStatSnapshot();
     statusMessage.value = "";
-    errorMessage.value = formatError(error, "Failed to read JSON file.");
-  } finally {
-    input.value = "";
+    errorMessage.value = formatError(error, t("message.failedReadJson"));
   }
+}
+
+function pathBaseName(path: string) {
+  return path.split(/[\\/]/).pop() ?? path;
+}
+
+async function confirmImportOverwrite(title: string) {
+  if (rows.value.length === 0) return true;
+
+  return confirm(
+    t("message.importOverwrite"),
+    {
+      title,
+      kind: "warning",
+    },
+  );
 }
 
 function normalizeSentence(item: unknown): SentenceRow {
@@ -940,14 +2486,15 @@ function addRowAtEnd() {
 
 async function clearRows() {
   if (rows.value.length === 0) return;
+  if (isClearRowsConfirmOpen.value) return;
 
-  const confirmed = await confirm(
-    "Clear the entire list? This cannot be undone.",
-    {
-      title: "Clear List",
-      kind: "warning",
-    },
-  );
+  isClearRowsConfirmOpen.value = true;
+  const confirmed = await confirm(t("message.clearListConfirm"), {
+    title: t("main.clearList"),
+    kind: "warning",
+  }).finally(() => {
+    isClearRowsConfirmOpen.value = false;
+  });
 
   if (!confirmed) return;
 
@@ -956,20 +2503,24 @@ async function clearRows() {
   clearSelectedRows();
   pendingDeleteIndex.value = null;
   refreshStatSnapshot();
-  statusMessage.value = "List cleared.";
+  statusMessage.value = t("message.listCleared");
 }
 
 async function deleteSelectedRows() {
   if (selectedRowIds.value.size === 0) return;
+  if (isDeleteSelectedConfirmOpen.value) return;
 
   const deleteCount = selectedRowIds.value.size;
+  isDeleteSelectedConfirmOpen.value = true;
   const confirmed = await confirm(
-    `Delete ${deleteCount} selected row${deleteCount === 1 ? "" : "s"}? This cannot be undone.`,
+    `${t("message.deleteSelectedConfirmPrefix")} ${deleteCount} ${t("message.deleteSelectedConfirmSuffix")}`,
     {
-      title: "Delete Selected Rows",
+      title: t("main.deleteSelected"),
       kind: "warning",
     },
-  );
+  ).finally(() => {
+    isDeleteSelectedConfirmOpen.value = false;
+  });
 
   if (!confirmed) return;
 
@@ -980,7 +2531,45 @@ async function deleteSelectedRows() {
   pendingDeleteIndex.value = null;
   pruneVirtualRowState();
   markStatSnapshotDirty();
-  statusMessage.value = `Deleted ${deleteCount} selected row${deleteCount === 1 ? "" : "s"}.`;
+  statusMessage.value = `${t("message.deletedSelected")}: ${deleteCount} ${t("message.rows")}.`;
+}
+
+function openBulkStateDialog() {
+  if (selectedRowIds.value.size === 0) {
+    statusMessage.value = t("message.noRowsSelected");
+    errorMessage.value = "";
+    return;
+  }
+
+  if (!openMainDialog("bulkState")) return;
+  bulkStateValue.value = "⭕️temp";
+}
+
+function closeBulkStateDialog() {
+  isBulkStateDialogOpen.value = false;
+}
+
+function confirmBulkStateChange() {
+  const selectedIds = selectedRowIds.value;
+  if (selectedIds.size === 0) {
+    closeBulkStateDialog();
+    return;
+  }
+
+  recordCurrentStateForUndo();
+  let changedCount = 0;
+  rows.value = rows.value.map((row) => {
+    if (!selectedIds.has(getRowIdentity(row))) return row;
+    changedCount += 1;
+    return {
+      ...row,
+      state: bulkStateValue.value,
+    };
+  });
+  markStatSnapshotDirty();
+  closeBulkStateDialog();
+  statusMessage.value = `${t("message.changedSelectedRowsToPrefix")}: ${changedCount}; ${t("message.changedSelectedRowsToSuffix")} ${bulkStateValue.value}.`;
+  errorMessage.value = "";
 }
 
 function requestDeleteRow(rowIndex: number) {
@@ -1035,8 +2624,9 @@ function toggleFilteredRowSelection(checked: boolean) {
   selectedRowIds.value = nextSelectedIds;
 }
 
-function handleFilteredSelectionChange(event: Event) {
-  toggleFilteredRowSelection((event.currentTarget as HTMLInputElement).checked);
+function handleFilteredSelectionChange(event?: Event) {
+  event?.preventDefault();
+  toggleFilteredRowSelection(!isEveryFilteredRowSelected.value);
 }
 
 function clearSelectedRows() {
@@ -1097,8 +2687,8 @@ async function goToRow() {
     statusMessage.value = "";
     errorMessage.value =
       rows.value.length === 0
-        ? "There are no rows to jump to."
-        : `Enter a row number from 1 to ${rows.value.length}.`;
+        ? t("message.noRowsToJump")
+        : `${t("message.enterRowRangePrefix")} ${rows.value.length}${t("message.enterRowRangeSuffix")}`;
     return false;
   }
 
@@ -1109,12 +2699,12 @@ async function goToRow() {
 
   if (filteredIndex === -1) {
     statusMessage.value = "";
-    errorMessage.value = `Row ${targetRowNumber} is hidden by the current search filters.`;
+    errorMessage.value = `${t("message.rowHiddenByFiltersPrefix")} ${targetRowNumber} ${t("message.rowHiddenByFiltersSuffix")}`;
     return false;
   }
 
   errorMessage.value = "";
-  statusMessage.value = `Jumped to row ${targetRowNumber}.`;
+  statusMessage.value = `${t("message.jumpedToRow")} ${targetRowNumber}.`;
 
   const nextScrollTop = sumRowHeights(filteredRows.value, 0, filteredIndex);
   tableScrollTop.value = nextScrollTop;
@@ -1153,6 +2743,53 @@ function updateTableViewport() {
   if (!tableWrap.value) return;
   tableScrollTop.value = tableWrap.value.scrollTop;
   tableViewportHeight.value = tableWrap.value.clientHeight;
+}
+
+async function restoreTableScrollAnchor(anchor: TableScrollAnchor | null) {
+  await nextTick();
+  applyTableScrollAnchor(anchor);
+  window.requestAnimationFrame(() => {
+    applyTableScrollAnchor(anchor);
+    updateTableViewport();
+  });
+}
+
+function applyTableScrollAnchor(anchor: TableScrollAnchor | null) {
+  if (!anchor) {
+    setTableScrollTop(0);
+    return;
+  }
+
+  const items = filteredRows.value;
+  if (items.length === 0) {
+    setTableScrollTop(0);
+    return;
+  }
+
+  let matchingOccurrence = 0;
+  let targetIndex = -1;
+  for (let index = 0; index < items.length; index += 1) {
+    if (sentenceRowSignature(items[index].row) !== anchor.signature) continue;
+    if (matchingOccurrence === anchor.occurrence) {
+      targetIndex = index;
+      break;
+    }
+    matchingOccurrence += 1;
+  }
+
+  if (targetIndex === -1) {
+    targetIndex = Math.min(anchor.filteredIndex, items.length - 1);
+  }
+
+  const nextScrollTop = sumRowHeights(items, 0, targetIndex) + anchor.offset;
+  setTableScrollTop(Math.max(0, nextScrollTop));
+}
+
+function setTableScrollTop(scrollTop: number) {
+  tableScrollTop.value = scrollTop;
+  if (tableWrap.value) {
+    tableWrap.value.scrollTop = scrollTop;
+  }
 }
 
 function alignRenderedRow(row: SentenceRow) {
@@ -1236,22 +2873,28 @@ function queuePersistDraft() {
   }, 250);
 }
 
-function persistDraft() {
+async function persistDraft() {
   try {
-    if (rows.value.length === 0 && fileName.value === "") {
+    if (rows.value.length === 0 && fileName.value === "" && jsonPath.value === "") {
+      await invoke("delete_app_draft", { name: "main" });
       window.localStorage.removeItem(draftStorageKey);
       return;
     }
 
     const draft: StoredDraft = {
       fileName: fileName.value,
+      jsonPath: jsonPath.value,
       rows: rows.value,
     };
 
-    window.localStorage.setItem(draftStorageKey, JSON.stringify(draft));
-    statusMessage.value = "Auto-saved locally.";
+    await invoke("write_app_draft", {
+      contents: JSON.stringify(draft),
+      name: "main",
+    });
+    window.localStorage.removeItem(draftStorageKey);
+    statusMessage.value = t("message.autoSavedLocal");
   } catch (error) {
-    errorMessage.value = formatError(error, "Failed to auto-save locally.");
+    errorMessage.value = formatError(error, t("message.failedAutoSave"));
   }
 }
 
@@ -1259,6 +2902,209 @@ function formatError(error: unknown, fallback: string) {
   if (error instanceof Error) return error.message;
   if (typeof error === "string" && error.trim()) return error;
   return fallback;
+}
+
+function formatMessageTimestamp() {
+  const now = new Date();
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
+}
+
+function defaultLlmSettings(): LlmServerSettings {
+  return {
+    providerMode: "local",
+    providerName: "OpenAI compatible",
+    baseUrl: "http://localhost:11434/v1",
+    model: "",
+    organization: "",
+    project: "",
+    extraRequestJson: "",
+  };
+}
+
+function defaultAiTranslationPrompt() {
+  return `You are translating text for a retro video game ROM editing tool.
+
+Translate the current text from {source_language} into {target_language}.
+
+Rules:
+- Preserve all control codes, placeholders, bracketed tokens, and special tokens exactly.
+- Do not remove or reorder tokens such as <...>, [...], {...}.
+- Preserve intentional line breaks when they affect layout.
+- Prefer concise game UI/dialogue style.
+- Do not add explanations or invent story details.
+- If the existing translation is usable, improve it instead of rewriting unnecessarily.
+- Follow the user note if provided.
+
+Current row:
+file_name: {file_name}
+title_addr: {title_addr}
+state: {state}
+note: {note}
+
+Original text:
+{original_text}
+
+Existing translation:
+{translated_text}
+
+Nearby context, for reference only:
+{nearby_rows}
+
+Reference txt attachment, for terminology and style only. Do not translate this whole attachment:
+{attachment_text}
+
+Return only valid JSON:
+{
+  "translated_text": "translated result",
+  "note": "optional short note, or empty string"
+}`;
+}
+
+function defaultAiTranslationVideoPrompt() {
+  return `You are translating subtitles for a video.
+
+Translate the current subtitle from {source_language} into {target_language}.
+
+Rules:
+- Preserve the meaning, tone, and speaker intent.
+- Make the translation natural for on-screen subtitles, not literal word-by-word text.
+- Keep the subtitle concise enough to read during the original timing.
+- Preserve intentional line breaks when they improve readability.
+- Do not add explanations, timestamps, speaker labels, or commentary.
+- Preserve names, terminology, bracketed tokens, and placeholders exactly when they should not be translated.
+- If the existing translation is usable, improve it instead of rewriting unnecessarily.
+- Follow the user note if provided.
+
+Current subtitle:
+timecode/title_addr: {title_addr}
+file_name: {file_name}
+state: {state}
+note: {note}
+
+Original subtitle:
+{original_text}
+
+Existing translation:
+{translated_text}
+
+Nearby subtitle context, for reference only:
+{nearby_rows}
+
+Reference txt attachment, for terminology, names, and style only. Do not translate this whole attachment:
+{attachment_text}
+
+Return only valid JSON:
+{
+  "translated_text": "translated subtitle",
+  "note": "optional short note, or empty string"
+}`;
+}
+
+function defaultAiTranslationSettings(): AiTranslationSettings {
+  return {
+    scope: "filtered",
+    sourceLanguage: "Japanese",
+    targetLanguage: "简体中文",
+    promptTemplate: defaultAiTranslationPrompt(),
+    minOriginalCharacters: 1,
+    timeoutSeconds: 60,
+    temperature: 0.2,
+    attachmentPath: "",
+  };
+}
+
+function restoreLlmSettings(): LlmServerSettings {
+  try {
+    const rawSettings = window.localStorage.getItem(llmSettingsStorageKey);
+    if (!rawSettings) return defaultLlmSettings();
+    const settings = sanitizeLlmSettings(JSON.parse(rawSettings));
+    window.localStorage.setItem(llmSettingsStorageKey, JSON.stringify(settings));
+    return settings;
+  } catch {
+    window.localStorage.removeItem(llmSettingsStorageKey);
+    return defaultLlmSettings();
+  }
+}
+
+function persistLlmSettings() {
+  window.localStorage.setItem(llmSettingsStorageKey, JSON.stringify(llmSettings.value));
+}
+
+function restoreAiTranslationSettings(): AiTranslationSettings {
+  try {
+    const rawSettings = window.localStorage.getItem(aiTranslationSettingsStorageKey);
+    if (!rawSettings) return defaultAiTranslationSettings();
+    return sanitizeAiTranslationSettings(JSON.parse(rawSettings));
+  } catch {
+    window.localStorage.removeItem(aiTranslationSettingsStorageKey);
+    return defaultAiTranslationSettings();
+  }
+}
+
+function persistAiTranslationSettings() {
+  window.localStorage.setItem(
+    aiTranslationSettingsStorageKey,
+    JSON.stringify(aiTranslationSettings.value),
+  );
+}
+
+function sanitizeLlmSettings(value: unknown): LlmServerSettings {
+  const defaults = defaultLlmSettings();
+  if (!isPlainRecord(value)) return defaults;
+
+  return {
+    providerMode: value.providerMode === "cloud" ? "cloud" : "local",
+    providerName: textSetting(value.providerName, defaults.providerName),
+    baseUrl: textSetting(value.baseUrl, defaults.baseUrl),
+    model: textSetting(value.model, defaults.model),
+    organization: textSetting(value.organization, defaults.organization),
+    project: textSetting(value.project, defaults.project),
+    extraRequestJson: textSetting(value.extraRequestJson, defaults.extraRequestJson),
+  };
+}
+
+function sanitizeAiTranslationSettings(value: unknown): AiTranslationSettings {
+  const defaults = defaultAiTranslationSettings();
+  if (!isPlainRecord(value)) return defaults;
+
+  return {
+    scope: translationScopeSetting(value.scope, defaults.scope),
+    sourceLanguage: textSetting(value.sourceLanguage, defaults.sourceLanguage),
+    targetLanguage: textSetting(value.targetLanguage, defaults.targetLanguage),
+    promptTemplate: textSetting(value.promptTemplate, defaults.promptTemplate),
+    minOriginalCharacters: clampNumber(
+      value.minOriginalCharacters,
+      0,
+      10000,
+      defaults.minOriginalCharacters,
+    ),
+    timeoutSeconds: clampNumber(value.timeoutSeconds, 1, 600, defaults.timeoutSeconds),
+    temperature: clampNumber(value.temperature, 0, 2, defaults.temperature),
+    attachmentPath: textSetting(value.attachmentPath, defaults.attachmentPath),
+  };
+}
+
+function translationScopeSetting(value: unknown, fallback: AiTranslationScope) {
+  return value === "all" ||
+    value === "selected" ||
+    value === "filtered"
+    ? value
+    : fallback;
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function textSetting(value: unknown, fallback: string) {
+  return typeof value === "string" ? value : fallback;
+}
+
+function clampNumber(value: unknown, min: number, max: number, fallback: number) {
+  const parsed = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(max, Math.max(min, parsed));
 }
 
 function newlineHintParts(value: string) {
@@ -1290,6 +3136,17 @@ function cjkFontFamily(mode: CjkFallbackMode) {
   };
 
   return fontFamilies[mode];
+}
+
+function fontOptionLabel(mode: CjkFallbackMode) {
+  const labels: Record<CjkFallbackMode, string> = {
+    default: t("font.default"),
+    sc: t("font.sc"),
+    tc: t("font.tc"),
+    jp: t("font.jp"),
+    kr: t("font.kr"),
+  };
+  return labels[mode];
 }
 
 function adjustColumnFontSize(columnIndex: number, delta: number) {
@@ -1336,6 +3193,12 @@ function syncWindowTheme() {
   });
 }
 
+function syncAppLanguageMenu() {
+  invoke("set_app_language_menu", { language: currentLanguage.value }).catch((error) => {
+    console.warn("Failed to sync app language menu.", error);
+  });
+}
+
 function syncHistoryMenuState() {
   invoke("set_history_menu_enabled", {
     canUndo: canUndoTableChange.value,
@@ -1345,9 +3208,9 @@ function syncHistoryMenuState() {
   });
 }
 
-function refreshStatSnapshot() {
-  statSnapshot.value = buildStatSnapshot();
-  isStatSnapshotDirty.value = false;
+function refreshStatSnapshot(resetScroll = true) {
+  if (!resetScroll) return;
+
   tableScrollTop.value = 0;
   if (tableWrap.value) {
     tableWrap.value.scrollTop = 0;
@@ -1355,77 +3218,7 @@ function refreshStatSnapshot() {
 }
 
 function markStatSnapshotDirty() {
-  isStatSnapshotDirty.value = true;
-}
-
-function buildStatSnapshot(): StatSnapshot {
-  const snapshot = createEmptyStatSnapshot();
-  const titleAddressCounts = new Map<string, number>();
-
-  snapshot.total = rows.value.length;
-
-  for (const row of rows.value) {
-    const normalizedTitleAddress = row.title_addr.trim();
-    if (normalizedTitleAddress === "") continue;
-
-    titleAddressCounts.set(
-      normalizedTitleAddress,
-      (titleAddressCounts.get(normalizedTitleAddress) ?? 0) + 1,
-    );
-  }
-
-  for (const row of rows.value) {
-    const rowId = getRowIdentity(row);
-    snapshot.stateCounts[row.state] += 1;
-    addStatMembership(snapshot, { type: "state", state: row.state }, rowId);
-
-    if (row.translated_text.trim() === "") {
-      snapshot.emptyTranslations += 1;
-      addStatMembership(snapshot, { type: "empty_translation" }, rowId);
-    }
-
-    if (isNotTranslated(row)) {
-      snapshot.notTranslated += 1;
-      addStatMembership(snapshot, { type: "not_translated" }, rowId);
-    }
-
-    if (row.note.trim() !== "") {
-      snapshot.rowsWithNotes += 1;
-      addStatMembership(snapshot, { type: "has_note" }, rowId);
-    }
-
-    if ((titleAddressCounts.get(row.title_addr.trim()) ?? 0) > 1) {
-      snapshot.duplicateTitleAddresses += 1;
-      addStatMembership(snapshot, { type: "duplicate_title_addr" }, rowId);
-    }
-  }
-
-  return snapshot;
-}
-
-function createEmptyStatSnapshot(): StatSnapshot {
-  return {
-    duplicateTitleAddresses: 0,
-    emptyTranslations: 0,
-    memberships: new Map(),
-    notTranslated: 0,
-    rowsWithNotes: 0,
-    stateCounts: Object.fromEntries(
-      stateOptions.map((state) => [state, 0]),
-    ) as Record<StateValue, number>,
-    total: rows.value.length,
-  };
-}
-
-function addStatMembership(
-  snapshot: StatSnapshot,
-  filter: StatFilter,
-  rowId: number,
-) {
-  const filterKey = statFilterKey(filter);
-  const membership = snapshot.memberships.get(filterKey) ?? new Set<number>();
-  membership.add(rowId);
-  snapshot.memberships.set(filterKey, membership);
+  // Filters and statistics are computed directly from current rows now.
 }
 
 function getRowIdentity(row: SentenceRow) {
@@ -1443,8 +3236,18 @@ function isNotTranslated(row: SentenceRow) {
   return originalText !== "" && originalText === row.translated_text.trim();
 }
 
+function isOriginalEqualsTranslated(row: SentenceRow) {
+  const originalText = row.original_text.trim();
+  return originalText === "" || originalText !== row.translated_text.trim();
+}
+
 function clearStatFilters() {
   activeStatFilters.value = [];
+}
+
+function clearRowFilter() {
+  rowFilterStart.value = "";
+  rowFilterEnd.value = "";
 }
 
 function toggleStatFilter(filter: StatFilter) {
@@ -1483,8 +3286,38 @@ function rowMatchesStatFilter(row: SentenceRow) {
 }
 
 function rowMatchesSingleStatFilter(row: SentenceRow, filter: StatFilter) {
-  const membership = statSnapshot.value.memberships.get(statFilterKey(filter));
-  return membership?.has(getRowIdentity(row)) ?? false;
+  switch (filter.type) {
+    case "state":
+      return row.state === filter.state;
+    case "empty_translation":
+      return row.translated_text.trim() === "";
+    case "not_translated":
+      return isNotTranslated(row);
+    case "original_equals_translated":
+      return isOriginalEqualsTranslated(row);
+    case "has_note":
+      return row.note.trim() !== "";
+    case "duplicate_title_addr": {
+      return duplicateTitleAddressIds.value.has(getRowIdentity(row));
+    }
+  }
+}
+
+function rowMatchesRowRange(rowIndex: number) {
+  const rowNumber = rowIndex + 1;
+  const start = positiveIntegerOrNull(rowFilterStart.value);
+  const end = positiveIntegerOrNull(rowFilterEnd.value);
+
+  if (start !== null && rowNumber < start) return false;
+  if (end !== null && rowNumber > end) return false;
+  return true;
+}
+
+function positiveIntegerOrNull(value: unknown) {
+  const text = String(value).trim();
+  if (text === "") return null;
+  const parsed = Number.parseInt(text, 10);
+  return Number.isInteger(parsed) && parsed >= 1 ? parsed : null;
 }
 
 function normalizeSearchValue(value: string) {
@@ -1498,6 +3331,25 @@ function textMatches(value: string, query: string) {
   }
 
   return searchableValue.includes(query);
+}
+
+function textLengthMatches(value: string) {
+  const minLength = nonNegativeIntegerOrNull(searchLengthMin.value);
+  const maxLength = nonNegativeIntegerOrNull(searchLengthMax.value);
+  if (minLength === null && maxLength === null) return true;
+
+  const length = Array.from(value).length;
+  if (length === 0 && minLength !== 0) return false;
+  if (minLength !== null && length < minLength) return false;
+  if (maxLength !== null && length > maxLength) return false;
+  return true;
+}
+
+function nonNegativeIntegerOrNull(value: unknown) {
+  const text = String(value).trim();
+  if (text === "") return null;
+  const parsed = Number.parseInt(text, 10);
+  return Number.isInteger(parsed) && parsed >= 0 ? parsed : null;
 }
 
 function restoreThemeMode(): ThemeMode {
@@ -1586,9 +3438,11 @@ function normalizeCjkFallbackMode(value: unknown): CjkFallbackMode {
     : "default";
 }
 
-function restoreDraft() {
+async function restoreDraft() {
   try {
-    const rawDraft = window.localStorage.getItem(draftStorageKey);
+    const backendDraft = await invoke<string | null>("read_app_draft", { name: "main" });
+    const legacyDraft = window.localStorage.getItem(draftStorageKey);
+    const rawDraft = backendDraft ?? legacyDraft;
     if (!rawDraft) return;
 
     const draft = JSON.parse(rawDraft) as Partial<StoredDraft>;
@@ -1596,10 +3450,17 @@ function restoreDraft() {
 
     rows.value = draft.rows.map(normalizeStoredRow);
     fileName.value = toText(draft.fileName);
+    jsonPath.value = toText(draft.jsonPath);
     refreshStatSnapshot();
-    statusMessage.value = "Restored local draft.";
+    statusMessage.value = t("message.restoredLocalDraft");
+    if (!backendDraft && legacyDraft) {
+      // Migrate old browser storage into app data on first successful restore.
+      window.localStorage.removeItem(draftStorageKey);
+      queuePersistDraft();
+    }
   } catch {
     window.localStorage.removeItem(draftStorageKey);
+    invoke("delete_app_draft", { name: "main" }).catch(() => {});
   }
 }
 
@@ -1632,28 +3493,23 @@ function startResize(columnIndex: number, event: PointerEvent) {
       <header class="toolbar">
         <div class="toolbar-actions">
           <div class="toolbar-controls">
-            <select v-model="themeMode" class="theme-select" aria-label="Theme">
-              <option
-                v-for="theme in themeOptions"
-                :key="theme.value"
-                :value="theme.value"
-              >
-                {{ theme.label }}
-              </option>
+            <select v-model="themeMode" class="theme-select" :aria-label="t('common.theme')">
+              <option value="light">{{ t("theme.light") }}</option>
+              <option value="dark">{{ t("theme.dark") }}</option>
             </select>
-            <button type="button" @click="openFilePicker">Read JSON</button>
+            <button type="button" @click="openFilePicker">{{ t("main.readJson") }}</button>
             <button type="button" :disabled="!canSaveJson" @click="saveJsonFile">
-              {{ isSaving ? "Saving..." : "Save JSON" }}
+              {{ isSaving ? t("common.saving") : t("main.saveJson") }}
             </button>
             <button type="button" @click="openExcelImportDialog">
-              Import Excel
+              {{ t("main.importExcel") }}
             </button>
             <button
               type="button"
               :disabled="rows.length === 0"
               @click="openExcelExportDialog"
             >
-              Export Excel
+              {{ t("main.exportExcel") }}
             </button>
             <button
               class="clear-list-btn"
@@ -1661,7 +3517,7 @@ function startResize(columnIndex: number, event: PointerEvent) {
               :disabled="rows.length === 0"
               @click="clearRows"
             >
-              Clear List
+              {{ t("main.clearList") }}
             </button>
             <button
               class="delete-selected-btn"
@@ -1669,44 +3525,73 @@ function startResize(columnIndex: number, event: PointerEvent) {
               :disabled="selectedRowCount === 0"
               @click="deleteSelectedRows"
             >
-              Delete Selected {{ selectedRowCount > 0 ? selectedRowCount : "" }}
+              {{ t("main.deleteSelected") }} {{ selectedRowCount > 0 ? selectedRowCount : "" }}
             </button>
           </div>
-          <p class="file-status">{{ fileName || "No JSON file loaded" }}</p>
+          <p class="file-status">
+            {{
+              jsonPath ||
+              (rows.length > 0
+                ? t("main.noJsonSavePath")
+                : t("main.noJsonFileLoaded"))
+            }}
+          </p>
         </div>
-        <input
-          ref="fileInput"
-          class="file-input"
-          type="file"
-          accept=".json,application/json"
-          @change="loadJsonFile"
-        />
+          <span class="result-count">
+            <!-- {{ renderedRows.length }} / {{ filteredRows.length }} / {{ rows.length }} -->
+              {{ filteredRows.length }} / {{ rows.length }}
+          </span>
       </header>
 
       <div class="search-panel" aria-label="Search filters">
-        <div class="search-main">
-          <input
-            v-model="searchText"
-            type="search"
-            placeholder="Search text..."
-            aria-label="Search text"
-          />
-          <select v-model="textMatchMode" aria-label="Text match mode">
-            <option
-              v-for="option in textMatchOptions"
-              :key="option.value"
-              :value="option.value"
-            >
-              {{ option.label }}
-            </option>
-          </select>
-          <label class="checkbox-label case-checkbox">
-            <input v-model="isCaseSensitiveSearch" type="checkbox" />
-            <span>Case sensitive</span>
-          </label>
-          <span class="result-count">
-            {{ renderedRows.length }} / {{ filteredRows.length }} / {{ rows.length }}
-          </span>
+        <div class="search-summary-row">
+          <div class="filter-group text-search-group">
+            <span class="filter-group-label"></span>
+            <input
+              v-model="searchText"
+              type="search"
+              :placeholder="t('common.searchText')"
+              :aria-label="t('common.searchText')"
+            />
+            <select v-model="textMatchMode" aria-label="Text match mode">
+              <option value="contains">{{ t("match.contains") }}</option>
+              <option value="exact">{{ t("match.exact") }}</option>
+            </select>
+            <label class="checkbox-label case-checkbox">
+              <input v-model="isCaseSensitiveSearch" type="checkbox" />
+              <span>{{ t("main.caseSensitive") }}</span>
+            </label>
+          </div>
+
+          <div class="filter-group length-filter-group">
+            <span class="filter-group-label">{{ t("main.length") }}</span>
+            <select v-model="searchLengthColumn" aria-label="String length column">
+              <option
+                v-for="column in textSearchColumns"
+                :key="column.key"
+                :value="column.key"
+              >
+                {{ column.label }}
+              </option>
+            </select>
+            <input
+              v-model="searchLengthMin"
+              type="text"
+              inputmode="numeric"
+              aria-label="Minimum string length"
+              :placeholder="t('main.min')"
+            />
+            <span class="range-separator">{{ t("main.to") }}</span>
+            <input
+              v-model="searchLengthMax"
+              type="text"
+              inputmode="numeric"
+              aria-label="Maximum string length"
+              :placeholder="t('main.max')"
+            />
+          </div>
+
+
         </div>
 
         <div class="search-columns" aria-label="Search columns">
@@ -1724,20 +3609,15 @@ function startResize(columnIndex: number, event: PointerEvent) {
           </label>
         </div>
 
-        <div class="stats-panel" aria-label="Row statistics">
+        <div class="stats-panel" aria-label="Status filters">
+          <span class="filter-group-label">{{ t("main.statusFilters") }}</span>
           <div class="stats-list">
             <button
               type="button"
               :class="{ active: !hasActiveStatFilters() }"
               @click="clearStatFilters"
             >
-              Total {{ rowStats.total }}
-            </button>
-            <button
-              type="button"
-              @click="clearStatFilters"
-            >
-              Filtered {{ rowStats.filtered }}
+              {{ t("common.all") }} {{ rowStats.total }}
             </button>
             <button
               v-for="state in stateOptions"
@@ -1753,69 +3633,94 @@ function startResize(columnIndex: number, event: PointerEvent) {
               :class="{ active: isStatFilterActive({ type: 'empty_translation' }) }"
               @click="toggleStatFilter({ type: 'empty_translation' })"
             >
-              Empty translation {{ rowStats.emptyTranslations }}
+              {{ t("main.emptyTranslation") }} {{ rowStats.emptyTranslations }}
             </button>
             <button
               type="button"
               :class="{ active: isStatFilterActive({ type: 'not_translated' }) }"
               @click="toggleStatFilter({ type: 'not_translated' })"
             >
-              Not translated {{ rowStats.notTranslated }}
+              {{ t("main.originalEqualsTranslated") }} {{ rowStats.notTranslated }}
+            </button>
+            <button
+              type="button"
+              :class="{ active: isStatFilterActive({ type: 'original_equals_translated' }) }"
+              @click="toggleStatFilter({ type: 'original_equals_translated' })"
+            >
+              {{ t("main.originalNotEqualsTranslated") }} {{ rowStats.originalEqualsTranslated }}
             </button>
             <button
               type="button"
               :class="{ active: isStatFilterActive({ type: 'has_note' }) }"
               @click="toggleStatFilter({ type: 'has_note' })"
             >
-              Has note {{ rowStats.rowsWithNotes }}
+              {{ t("main.hasNote") }} {{ rowStats.rowsWithNotes }}
             </button>
             <button
               type="button"
               :class="{ active: isStatFilterActive({ type: 'duplicate_title_addr' }) }"
               @click="toggleStatFilter({ type: 'duplicate_title_addr' })"
             >
-              Duplicate title_addr {{ rowStats.duplicateTitleAddresses }}
-            </button>
-            <button
-              class="refresh-stat-btn"
-              :class="{ dirty: isStatSnapshotDirty }"
-              type="button"
-              :title="
-                isStatSnapshotDirty
-                  ? 'Rows changed. Refresh to update statistic filters.'
-                  : 'Update statistic filters.'
-              "
-              @click="refreshStatSnapshot"
-            >
-              {{ isStatSnapshotDirty ? "Refresh Filters *" : "Refresh Filters" }}
+              {{ t("main.duplicateTitleAddr") }} {{ rowStats.duplicateTitleAddresses }}
             </button>
           </div>
 
-          <div class="secondary-actions">
-            <form class="go-to-row" aria-label="Go to row" @submit.prevent="goToRow">
-              <label for="go-to-row-input">Go to row</label>
-              <input
-                id="go-to-row-input"
-                v-model="goToRowValue"
-                type="number"
-                min="1"
-                :max="rows.length || undefined"
-                inputmode="numeric"
-              />
-              <button type="submit" :disabled="rows.length === 0">Go</button>
-            </form>
-          </div>
         </div>
       </div>
 
-      <p v-if="errorMessage" class="error-message">{{ errorMessage }}</p>
-      <p v-else-if="statusMessage" class="status-message">{{ statusMessage }}</p>
+      <div class="message-tools-row">
+        <p
+          class="message-slot"
+          :class="{
+            'error-message': errorMessage,
+            'status-message': !errorMessage && statusMessage,
+            empty: !errorMessage && !statusMessage,
+          }"
+        >
+          {{ displayedMessage || "\u00a0" }}
+        </p>
+        <div class="secondary-actions">
+          <div class="row-range-filter" aria-label="Filter row range">
+            <span>{{ t("main.rows") }}</span>
+            <input
+              v-model="rowFilterStart"
+              type="text"
+              inputmode="numeric"
+              aria-label="Filter from row"
+              :placeholder="t('main.min')"
+            />
+            <span>{{ t("main.to") }}</span>
+            <input
+              v-model="rowFilterEnd"
+              type="text"
+              inputmode="numeric"
+              aria-label="Filter to row"
+              :placeholder="t('main.max')"
+            />
+            <button type="button" :disabled="!hasActiveRowFilter" @click="clearRowFilter">
+              {{ t("common.clear") }}
+            </button>
+          </div>
+          <form class="go-to-row" aria-label="Go to row" @submit.prevent="goToRow">
+            <label for="go-to-row-input">{{ t("main.goToRow") }}</label>
+            <input
+              id="go-to-row-input"
+              v-model="goToRowValue"
+              type="number"
+              min="1"
+              :max="rows.length || undefined"
+              inputmode="numeric"
+            />
+            <button type="submit" :disabled="rows.length === 0">{{ t("main.go") }}</button>
+          </form>
+        </div>
+      </div>
     </section>
 
     <section
       ref="tableWrap"
       class="table-wrap"
-      aria-label="Sentence list"
+      :aria-label="t('main.sentenceList')"
       @scroll="handleTableScroll"
     >
       <div class="sentence-grid header-row" :style="{ gridTemplateColumns }">
@@ -1830,7 +3735,7 @@ function startResize(columnIndex: number, event: PointerEvent) {
               <input
                 class="row-select-checkbox"
                 type="checkbox"
-                aria-label="Select filtered rows"
+                :aria-label="t('main.selectFilteredRows')"
                 :checked="isEveryFilteredRowSelected"
                 :indeterminate="
                   isSomeFilteredRowSelected && !isEveryFilteredRowSelected
@@ -1841,7 +3746,7 @@ function startResize(columnIndex: number, event: PointerEvent) {
               <button
                 class="row-action-btn add-row-btn"
                 type="button"
-                aria-label="Add row at end"
+                :aria-label="t('main.addRowAtEnd')"
                 @click="addRowAtEnd"
               >
                 +
@@ -1871,7 +3776,7 @@ function startResize(columnIndex: number, event: PointerEvent) {
               v-if="column.key === 'original_text'"
               class="fallback-controls"
             >
-              <span>Fallback</span>
+              <span>{{ t("main.font") }}</span>
               <select
                 v-model="cjkFallbackPrefs.original"
                 aria-label="original_text fallback font preference"
@@ -1881,7 +3786,7 @@ function startResize(columnIndex: number, event: PointerEvent) {
                   :key="option.value"
                   :value="option.value"
                 >
-                  {{ option.label }}
+                  {{ fontOptionLabel(option.value) }}
                 </option>
               </select>
             </div>
@@ -1889,7 +3794,7 @@ function startResize(columnIndex: number, event: PointerEvent) {
               v-else-if="column.key === 'translated_text'"
               class="fallback-controls"
             >
-              <span>Fallback</span>
+              <span>{{ t("main.font") }}</span>
               <select
                 v-model="cjkFallbackPrefs.translated"
                 aria-label="translated_text fallback font preference"
@@ -1899,12 +3804,12 @@ function startResize(columnIndex: number, event: PointerEvent) {
                   :key="option.value"
                   :value="option.value"
                 >
-                  {{ option.label }}
+                  {{ fontOptionLabel(option.value) }}
                 </option>
               </select>
             </div>
             <div v-else-if="column.key === 'note'" class="fallback-controls">
-              <span>Fallback</span>
+              <span>{{ t("main.font") }}</span>
               <select
                 v-model="cjkFallbackPrefs.note"
                 aria-label="note fallback font preference"
@@ -1914,7 +3819,7 @@ function startResize(columnIndex: number, event: PointerEvent) {
                   :key="option.value"
                   :value="option.value"
                 >
-                  {{ option.label }}
+                  {{ fontOptionLabel(option.value) }}
                 </option>
               </select>
             </div>
@@ -1930,11 +3835,11 @@ function startResize(columnIndex: number, event: PointerEvent) {
       </div>
 
       <div v-if="rows.length === 0" class="empty-state">
-        Load a JSON file to display Sentence rows.
+        {{ t("main.noJsonFileLoaded") }}
       </div>
 
       <div v-else-if="filteredRows.length === 0" class="empty-state">
-        No matching Sentence rows.
+        {{ t("message.noMatchingSentenceRows") }}
       </div>
 
       <div v-else class="rows-scroll">
@@ -2176,6 +4081,98 @@ function startResize(columnIndex: number, event: PointerEvent) {
       @confirm="confirmGoToRowDialog"
     />
 
+    <CharacterStatsDialog
+      v-if="isCharacterStatsDialogOpen"
+      v-model:scope="characterStatsScope"
+      v-model:include-all-characters="characterStatsIncludeAll"
+      v-model:character-types="characterStatsTypes"
+      v-model:sort-order="characterStatsSortOrder"
+      v-model:bracket-token-types="characterStatsBracketTokenTypes"
+      v-model:ignore-whitespace="characterStatsIgnoreWhitespace"
+      always-show-progress
+      :can-copy="characterStatsResult !== ''"
+      :is-running="isCountingCharacterStats"
+      :message="characterStatsMessage"
+      :progress-value="characterStatsProgress"
+      :result="characterStatsResult"
+      :row-count="characterStatsRowCount"
+      show-ignore-whitespace
+      @close="closeCharacterStatsDialog"
+      @copy="copyCharacterStatsResult"
+      @run="runCharacterStats"
+    />
+
+    <LlmSettingsDialog
+      v-if="isLlmSettingsDialogOpen"
+      :api-key-input="llmApiKeyInput"
+      :has-stored-api-key="hasStoredLlmApiKey"
+      :is-testing="isTestingLlmConnection"
+      :message="llmSettingsMessage"
+      :settings="llmSettings"
+      :timeout-seconds="aiTranslationSettings.timeoutSeconds"
+      @clear-api-key="clearLlmApiKey"
+      @close="closeLlmSettingsDialog"
+      @reset="resetLlmSettings"
+      @save-api-key="saveLlmApiKey"
+      @test="testLlmConnection"
+      @update-api-key-input="updateLlmApiKeyInput"
+      @update-timeout-seconds="updateAiTranslationTimeoutSeconds"
+      @update="updateLlmSettings"
+    />
+
+    <AiTranslationDialog
+      v-if="isAiTranslationDialogOpen"
+      :has-result="aiTranslationSession !== null"
+      :is-fake-mode="isAiTranslationFakeMode"
+      :is-translating="isPreparingAiTranslation"
+      :message="aiTranslationMessage"
+      :row-count="aiTranslationRowCount"
+      :settings="aiTranslationSettings"
+      @browse-attachment="browseAiTranslationAttachment"
+      @clear-attachment="clearAiTranslationAttachment"
+      @close="closeAiTranslationDialog"
+      @open-result="openAiTranslationResultDialog"
+      @reset-prompt="resetAiTranslationPrompt"
+      @reset-video-prompt="resetAiTranslationVideoPrompt"
+      @translate="translateWithAi"
+      @update="updateAiTranslationSettings"
+    />
+
+    <AiTranslationRunDialog
+      v-if="isPreparingAiTranslation"
+      :completed-count="aiTranslationCompletedCount"
+      :current-original-text="aiTranslationFinishedText"
+      :current-translated-text="aiTranslationFinishedPreview"
+      :error-count="aiTranslationErrorCount"
+      :is-stopping="isAiTranslationStopRequested"
+      :message="aiTranslationMessage"
+      :total-count="aiTranslationRowCount"
+      @stop="stopAiTranslationRun"
+    />
+
+    <AiTranslationSessionDialog
+      v-if="isAiTranslationSessionDialogOpen && aiTranslationSession"
+      :message="aiTranslationSessionMessage"
+      :selected-task-ids="Array.from(selectedAiTranslationTaskIds)"
+      :session="aiTranslationSession"
+      :update-state-on-apply="updateAiTranslationStateOnApply"
+      @apply-selected="applySelectedAiTranslationResults"
+      @close="closeAiTranslationSessionDialog"
+      @discard="discardAiTranslationSession"
+      @select-all="selectAllAiTranslationResults"
+      @toggle-task="toggleAiTranslationTaskSelection"
+      @update-state-on-apply="updateAiTranslationStateOnApply = $event"
+    />
+
+    <BulkStateDialog
+      v-if="isBulkStateDialogOpen"
+      v-model="bulkStateValue"
+      :selected-count="selectedRowCount"
+      :state-options="stateOptions"
+      @close="closeBulkStateDialog"
+      @confirm="confirmBulkStateChange"
+    />
+
     <ExcelImportDialog
       v-if="isExcelImportDialogOpen"
       v-model:path="excelImportPath"
@@ -2187,8 +4184,11 @@ function startResize(columnIndex: number, event: PointerEvent) {
       v-model:state-column="excelImportStateColumn"
       v-model:file-name-mode="excelImportFileNameMode"
       v-model:file-name-column="excelImportFileNameColumn"
+      v-model:append-rows="excelImportAppendRows"
       :can-import="canImportExcel"
+      :is-error="errorMessage !== ''"
       :is-importing="isImportingExcel"
+      :message="displayedMessage"
       @browse="browseExcelImportPath"
       @close="closeExcelImportDialog"
       @confirm="confirmExcelImport"
@@ -2201,11 +4201,42 @@ function startResize(columnIndex: number, event: PointerEvent) {
       v-model:split-by-file-name="exportSplitByFileName"
       v-model:include-row-number="exportIncludeRowNumber"
       :can-export="canExportExcel"
+      :is-error="errorMessage !== ''"
       :is-exporting="isExportingExcel"
+      :message="displayedMessage"
       :row-count="rows.length"
       @browse="browseExcelExportPath"
       @close="closeExcelExportDialog"
       @confirm="confirmExcelExport"
+    />
+
+    <SrtImportDialog
+      v-if="isSrtImportDialogOpen"
+      v-model:path="srtImportPath"
+      v-model:append-rows="srtImportAppendRows"
+      :can-import="canImportSrt"
+      :is-error="errorMessage !== ''"
+      :is-importing="isImportingSrt"
+      :message="displayedMessage"
+      @browse="browseSrtImportPath"
+      @close="closeSrtImportDialog"
+      @confirm="confirmSrtImport"
+    />
+
+    <SrtExportDialog
+      v-if="isSrtExportDialogOpen"
+      v-model:path="srtExportPath"
+      v-model:encoding="srtExportEncoding"
+      v-model:bilingual="srtExportBilingual"
+      v-model:filtered-only="srtExportFilteredOnly"
+      :can-export="canExportSrt"
+      :is-error="errorMessage !== ''"
+      :is-exporting="isExportingSrt"
+      :message="displayedMessage"
+      :row-count="rows.length"
+      @browse="browseSrtExportPath"
+      @close="closeSrtExportDialog"
+      @confirm="confirmSrtExport"
     />
   </main>
 </template>
@@ -2443,28 +4474,66 @@ button {
   display: none;
 }
 
-.error-message {
+.message-tools-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  grid-column: 1 / -1;
+  min-width: 0;
+}
+
+.message-slot {
   margin: 0;
-  border: 1px solid var(--danger-border-soft);
+  min-height: 29px;
+  border: 1px solid transparent;
   border-radius: 6px;
   padding: 5px 8px;
-  color: var(--danger-text-soft);
-  background: var(--danger-bg-soft);
   font-size: 12px;
   line-height: 1.25;
-  grid-column: 1 / -1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.message-slot.empty {
+  visibility: hidden;
+}
+
+.error-message {
+  border-color: var(--danger-border-soft);
+  color: var(--danger-text-soft);
+  background: var(--danger-bg-soft);
 }
 
 .status-message {
-  margin: 0;
+  border-color: var(--info-border);
+  color: var(--info-text);
+  background: var(--info-bg);
+}
+
+.dialog-inline-message {
+  margin: 0 0 12px;
   border: 1px solid var(--info-border);
   border-radius: 6px;
-  padding: 5px 8px;
+  padding: 6px 8px;
   color: var(--info-text);
   background: var(--info-bg);
   font-size: 12px;
-  line-height: 1.25;
-  grid-column: 1 / -1;
+  line-height: 1.35;
+}
+
+.dialog-inline-message.dialog-inline-error {
+  border-color: var(--danger-border-soft);
+  color: var(--danger-text-soft);
+  background: var(--danger-bg-soft);
+}
+
+.dialog-inline-message.empty {
+  border-color: var(--info-border);
+  color: transparent;
+  background: var(--info-bg);
 }
 
 .search-panel {
@@ -2474,15 +4543,48 @@ button {
   min-width: 0;
 }
 
-.search-main {
+.search-summary-row {
   display: grid;
-  grid-template-columns: minmax(180px, 1fr) 112px max-content auto;
+  grid-template-columns: minmax(260px, 1fr) max-content auto;
   gap: 8px;
   align-items: center;
+  min-width: 0;
 }
 
-.search-main input,
-.search-main select {
+.filter-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.filter-group-label {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 750;
+  white-space: nowrap;
+}
+
+.text-search-group input[type="search"] {
+  min-width: 150px;
+  flex: 1 1 190px;
+}
+
+.text-search-group select {
+  width: 112px;
+}
+
+.length-filter-group select {
+  width: 118px;
+}
+
+.length-filter-group input {
+  width: 54px;
+}
+
+.filter-group input,
+.filter-group select {
   min-height: 30px;
   border: 1px solid var(--control-border);
   border-radius: 6px;
@@ -2492,13 +4594,19 @@ button {
   font-size: 13px;
 }
 
-.search-main input:focus,
-.search-main select:focus {
+.filter-group input:focus,
+.filter-group select:focus {
   outline: 2px solid var(--primary);
   outline-offset: -1px;
 }
 
+.range-separator {
+  color: var(--text-soft);
+  font-size: 12px;
+}
+
 .result-count {
+  justify-self: end;
   color: var(--muted);
   font-size: 12px;
   white-space: nowrap;
@@ -2511,11 +4619,10 @@ button {
 }
 
 .stats-panel {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px 12px;
-  align-items: center;
-  justify-content: space-between;
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 6px;
+  align-items: start;
   min-width: 0;
 }
 
@@ -2581,7 +4688,8 @@ button {
   gap: 8px;
 }
 
-.go-to-row {
+.go-to-row,
+.row-range-filter {
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -2590,7 +4698,8 @@ button {
   white-space: nowrap;
 }
 
-.go-to-row input {
+.go-to-row input,
+.row-range-filter input {
   width: 72px;
   min-height: 28px;
   border: 1px solid var(--control-border);
@@ -2601,12 +4710,14 @@ button {
   font-size: 12px;
 }
 
-.go-to-row input:focus {
+.go-to-row input:focus,
+.row-range-filter input:focus {
   outline: 2px solid var(--primary);
   outline-offset: -1px;
 }
 
-.go-to-row button {
+.go-to-row button,
+.row-range-filter button {
   min-height: 28px;
   border: 1px solid var(--control-border);
   border-radius: 6px;
@@ -2614,6 +4725,12 @@ button {
   color: var(--button-text);
   background: var(--button-bg);
   font-size: 12px;
+}
+
+.row-range-filter button:disabled {
+  color: var(--muted);
+  background: var(--disabled-bg);
+  cursor: not-allowed;
 }
 
 .dialog-backdrop {
@@ -2664,7 +4781,8 @@ button {
 .excel-import-dialog input[type="text"],
 .excel-import-dialog input[type="number"],
 .excel-import-dialog select,
-.export-excel-dialog input[type="text"] {
+.export-excel-dialog input[type="text"],
+.export-excel-dialog select {
   width: 100%;
   min-height: 34px;
   border: 1px solid var(--control-border);
@@ -2678,7 +4796,8 @@ button {
 .go-to-row-dialog input:focus,
 .excel-import-dialog input:focus,
 .excel-import-dialog select:focus,
-.export-excel-dialog input[type="text"]:focus {
+.export-excel-dialog input[type="text"]:focus,
+.export-excel-dialog select:focus {
   outline: 2px solid var(--primary);
   outline-offset: -1px;
 }
@@ -2716,6 +4835,14 @@ button {
   margin-top: 12px;
 }
 
+.srt-select-field {
+  display: grid;
+  gap: 4px;
+  margin-top: 12px;
+  color: var(--text-soft);
+  font-size: 12px;
+}
+
 .excel-import-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -2734,6 +4861,18 @@ button {
   color: var(--muted);
   background: var(--disabled-bg);
   cursor: not-allowed;
+}
+
+.excel-import-dialog > .append-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 12px 0 0;
+  white-space: nowrap;
+}
+
+.excel-import-dialog > .append-option input {
+  flex: 0 0 auto;
 }
 
 .dialog-actions {
@@ -2786,16 +4925,28 @@ button {
 }
 
 @media (max-width: 980px) {
+  .message-tools-row {
+    grid-template-columns: 1fr;
+  }
+
   .top-panel {
     grid-template-columns: 1fr;
   }
 
-  .search-main {
-    grid-template-columns: minmax(180px, 1fr) 112px max-content;
+  .search-summary-row {
+    grid-template-columns: 1fr;
+  }
+
+  .filter-group {
+    flex-wrap: wrap;
   }
 
   .result-count {
-    grid-column: 1 / -1;
+    justify-self: start;
+  }
+
+  .stats-panel {
+    grid-template-columns: 1fr;
   }
 }
 
