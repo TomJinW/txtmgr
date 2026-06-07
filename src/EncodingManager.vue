@@ -594,9 +594,9 @@ function handleWindowsMenuShortcut(event: KeyboardEvent) {
     { action: "encoding_unmapped_characters", run: () => void openUnmappedCharactersDialog() },
     { action: "encoding_unused_encodings", run: () => void openUnusedEncodingsDialog() },
     { action: "encoding_line_length", run: () => void openLineLengthDialog() },
-    { action: "open_language_dialog", run: () => openLanguageDialog() },
-    { action: "language_en", run: () => setAppLanguage("en") },
-    { action: "language_zh_hans", run: () => setAppLanguage("zh-Hans") },
+    { action: "encoding_open_language_dialog", run: () => openLanguageDialog() },
+    { action: "encoding_language_en", run: () => setAppLanguage("en") },
+    { action: "encoding_language_zh_hans", run: () => setAppLanguage("zh-Hans") },
   ];
 
   const match = actions.find(({ action }) => windowsShortcutMatches(event, action));
@@ -2554,8 +2554,9 @@ function normalizeFallbackMode(value: unknown): CjkFallbackMode {
 
 function restoreThemeMode(): ThemeMode {
   const storedTheme = window.localStorage.getItem(themeStorageKey);
-  return storedTheme === "dark" || storedTheme === "light"
-    ? storedTheme
+  if (storedTheme === "dark" || storedTheme === "light") return storedTheme;
+  return window.matchMedia?.("(prefers-color-scheme: dark)").matches
+    ? "dark"
     : "light";
 }
 

@@ -22,6 +22,9 @@ const EXPORT_SRT_MENU_ID: &str = "export_srt";
 const OPEN_LANGUAGE_DIALOG_MENU_ID: &str = "open_language_dialog";
 const LANGUAGE_EN_MENU_ID: &str = "language_en";
 const LANGUAGE_ZH_HANS_MENU_ID: &str = "language_zh_hans";
+const ENCODING_OPEN_LANGUAGE_DIALOG_MENU_ID: &str = "encoding_open_language_dialog";
+const ENCODING_LANGUAGE_EN_MENU_ID: &str = "encoding_language_en";
+const ENCODING_LANGUAGE_ZH_HANS_MENU_ID: &str = "encoding_language_zh_hans";
 const CHARACTER_STATS_MENU_ID: &str = "character_stats";
 const UNDO_TABLE_CHANGE_MENU_ID: &str = "undo_table_change";
 const REDO_TABLE_CHANGE_MENU_ID: &str = "redo_table_change";
@@ -937,10 +940,10 @@ fn build_encoding_menu_for<R: Runtime>(
     .build(app)?;
 
     let language_dialog = MenuItemBuilder::with_id(
-        OPEN_LANGUAGE_DIALOG_MENU_ID,
+        ENCODING_OPEN_LANGUAGE_DIALOG_MENU_ID,
         menu_label(language, "language_dialog"),
     )
-    .accelerator(shortcut_accelerator(OPEN_LANGUAGE_DIALOG_MENU_ID))
+    .accelerator(shortcut_accelerator(ENCODING_OPEN_LANGUAGE_DIALOG_MENU_ID))
     .build(app)?;
 
     let file_menu = SubmenuBuilder::new(app, menu_label(language, "file"))
@@ -1218,17 +1221,17 @@ fn emit_encoding_menu_event<R: Runtime>(app: &AppHandle<R>, menu_id: &str) {
         ENCODING_LINE_LENGTH_MENU_ID => {
             let _ = app.emit_to("encoding", "encoding-open-line-length", ());
         }
-        OPEN_LANGUAGE_DIALOG_MENU_ID => {
+        ENCODING_OPEN_LANGUAGE_DIALOG_MENU_ID => {
             let _ = app.emit_to("encoding", "open-encoding-language-dialog", ());
         }
-        LANGUAGE_EN_MENU_ID => {
+        ENCODING_LANGUAGE_EN_MENU_ID => {
             let _ = app.emit_to(
                 "encoding",
                 "set-language",
                 serde_json::json!({ "target": "encoding", "language": "en" }),
             );
         }
-        LANGUAGE_ZH_HANS_MENU_ID => {
+        ENCODING_LANGUAGE_ZH_HANS_MENU_ID => {
             let _ = app.emit_to(
                 "encoding",
                 "set-language",
@@ -1424,9 +1427,9 @@ pub fn run() {
                             | ENCODING_UNMAPPED_CHARACTERS_MENU_ID
                             | ENCODING_UNUSED_ENCODINGS_MENU_ID
                             | ENCODING_LINE_LENGTH_MENU_ID
-                            | OPEN_LANGUAGE_DIALOG_MENU_ID
-                            | LANGUAGE_EN_MENU_ID
-                            | LANGUAGE_ZH_HANS_MENU_ID => {
+                            | ENCODING_OPEN_LANGUAGE_DIALOG_MENU_ID
+                            | ENCODING_LANGUAGE_EN_MENU_ID
+                            | ENCODING_LANGUAGE_ZH_HANS_MENU_ID => {
                                 emit_encoding_menu_event(app, event.id().as_ref());
                                 return;
                             }

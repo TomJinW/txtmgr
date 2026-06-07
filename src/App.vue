@@ -3434,8 +3434,9 @@ function nonNegativeIntegerOrNull(value: unknown) {
 
 function restoreThemeMode(): ThemeMode {
   const storedTheme = window.localStorage.getItem(themeStorageKey);
-  return storedTheme === "dark" || storedTheme === "light"
-    ? storedTheme
+  if (storedTheme === "dark" || storedTheme === "light") return storedTheme;
+  return window.matchMedia?.("(prefers-color-scheme: dark)").matches
+    ? "dark"
     : "light";
 }
 
