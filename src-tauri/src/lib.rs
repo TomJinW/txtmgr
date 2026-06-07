@@ -811,6 +811,7 @@ fn menu_label(language: &str, key: &str) -> &'static str {
     }
 }
 
+#[cfg(target_os = "macos")]
 fn build_encoding_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
     build_encoding_menu_for(app, "en")
 }
@@ -819,6 +820,7 @@ fn build_main_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
     build_main_menu_for(app, "en")
 }
 
+#[cfg(target_os = "macos")]
 fn build_encoding_menu_for<R: Runtime>(
     app: &AppHandle<R>,
     language: &str,
@@ -1092,6 +1094,7 @@ fn set_encoding_menu<R: Runtime>(app: &AppHandle<R>) {
     }
 }
 
+#[cfg(target_os = "macos")]
 fn emit_encoding_menu_event<R: Runtime, T: Emitter<R>>(target: &T, menu_id: &str) {
     // Menu handlers emit frontend events instead of invoking JS directly, which
     // keeps Rust platform routing separate from Vue workflow logic.
@@ -1256,9 +1259,12 @@ fn open_encoding_manager<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
         });
     }
 
-    window.on_menu_event(|window, event| {
-        emit_encoding_menu_event(window, event.id().as_ref());
-    });
+    #[cfg(target_os = "macos")]
+    {
+        window.on_menu_event(|window, event| {
+            emit_encoding_menu_event(window, event.id().as_ref());
+        });
+    }
 
     Ok(())
 }
@@ -1302,14 +1308,11 @@ pub fn run() {
 
             Ok(())
         })
-        .on_menu_event(|app, event| {
-            #[cfg(not(target_os = "macos"))]
-            {
-                return;
-            }
-
+        .on_menu_event(|_app, _event| {
             #[cfg(target_os = "macos")]
             {
+                let app = _app;
+                let event = _event;
                 if let Some(window) = app.get_webview_window("encoding") {
                     let encoding_is_focused = window.is_focused().unwrap_or(false);
 
