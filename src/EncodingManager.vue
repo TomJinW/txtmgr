@@ -2418,6 +2418,15 @@ function clearRowFilter() {
   rowFilterEnd.value = "";
 }
 
+function resetSearchFilters() {
+  searchText.value = "";
+  isCaseSensitiveSearch.value = false;
+  selectedSearchColumns.value = [...searchableColumns];
+  activeFilters.value = [];
+  rowFilterStart.value = "";
+  rowFilterEnd.value = "";
+}
+
 function rowMatchesFilter(row: EncodingRow, filter: EncodingFilter) {
   const text = row.original_char;
   switch (filter) {
@@ -2659,7 +2668,10 @@ function restoreThemeMode(): ThemeMode {
 }
 
 function restoreTopPanelVisible() {
-  return window.localStorage.getItem(topPanelVisibleStorageKey) !== "false";
+  const storedValue = window.localStorage.getItem(topPanelVisibleStorageKey);
+  if (storedValue === "true") return true;
+  if (storedValue === "false") return false;
+  return false;
 }
 
 function toggleTopPanel() {
@@ -3060,6 +3072,7 @@ function refreshDefaultCheckMessages() {
         @clear-filters="activeFilters = []"
         @clear-row-filter="clearRowFilter"
         @go-to-row="goToRow"
+        @reset-search="resetSearchFilters"
         @toggle-filter="toggleFilter"
       />
     </section>
@@ -3102,6 +3115,7 @@ function refreshDefaultCheckMessages() {
           @clear-filters="activeFilters = []"
           @clear-row-filter="clearRowFilter"
           @go-to-row="goToRow"
+          @reset-search="resetSearchFilters"
           @toggle-filter="toggleFilter"
         />
         </section>
@@ -3901,7 +3915,8 @@ button {
 }
 
 .encoding-shell .stats-list button,
-.encoding-shell .go-to-row button {
+.encoding-shell .go-to-row button,
+.encoding-shell .reset-search-btn {
   flex: 0 1 auto;
   max-width: 100%;
   border: 1px solid var(--control-border);
@@ -3914,9 +3929,21 @@ button {
   white-space: nowrap;
 }
 
+.encoding-shell .reset-search-btn {
+  min-height: 30px;
+  padding: 5px 10px;
+  font-size: 12px;
+}
+
 .encoding-shell .stats-list button:hover {
   border-color: var(--primary);
   color: var(--primary);
+}
+
+.encoding-shell .reset-search-btn:hover {
+  border-color: var(--primary);
+  color: var(--primary);
+  background: var(--control-hover-bg);
 }
 
 .encoding-shell .stats-list button.active {

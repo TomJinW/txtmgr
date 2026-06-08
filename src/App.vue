@@ -3700,6 +3700,19 @@ function clearRowFilter() {
   rowFilterEnd.value = "";
 }
 
+function resetSearchFilters() {
+  searchText.value = "";
+  textMatchMode.value = "contains";
+  isCaseSensitiveSearch.value = false;
+  searchLengthColumn.value = "translated_text";
+  searchLengthMin.value = "";
+  searchLengthMax.value = "";
+  selectedSearchColumns.value = textSearchColumns.map((column) => column.key);
+  activeStatFilters.value = [];
+  rowFilterStart.value = "";
+  rowFilterEnd.value = "";
+}
+
 function toggleStatFilter(filter: StatFilter) {
   const filterKey = statFilterKey(filter);
   const nextFilters = activeStatFilters.value.filter(
@@ -4061,6 +4074,7 @@ function startResize(columnIndex: number, event: PointerEvent) {
         @clear-row-filter="clearRowFilter"
         @clear-stat-filters="clearStatFilters"
         @go-to-row="goToRow"
+        @reset-search="resetSearchFilters"
         @toggle-stat-filter="toggleStatFilter"
       />
     </section>
@@ -4104,11 +4118,12 @@ function startResize(columnIndex: number, event: PointerEvent) {
             :rows-length="rows.length"
             :state-options="stateOptions"
             :text-search-columns="textSearchColumns"
-            @clear-row-filter="clearRowFilter"
-            @clear-stat-filters="clearStatFilters"
-            @go-to-row="goToRow"
-            @toggle-stat-filter="toggleStatFilter"
-          />
+          @clear-row-filter="clearRowFilter"
+          @clear-stat-filters="clearStatFilters"
+          @go-to-row="goToRow"
+          @reset-search="resetSearchFilters"
+          @toggle-stat-filter="toggleStatFilter"
+        />
         </section>
       </div>
     </div>
@@ -5075,6 +5090,23 @@ button {
   font-size: 11px;
   line-height: 1.2;
   white-space: nowrap;
+}
+
+.reset-search-btn {
+  min-height: 30px;
+  border: 1px solid var(--control-border);
+  border-radius: 6px;
+  padding: 5px 10px;
+  color: var(--text-soft);
+  background: var(--panel-bg);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.reset-search-btn:hover {
+  border-color: var(--primary);
+  color: var(--primary);
+  background: var(--control-hover-bg);
 }
 
 .stats-list button:hover {

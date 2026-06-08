@@ -29,6 +29,7 @@ const emit = defineEmits<{
   clearRowFilter: [];
   clearStatFilters: [];
   goToRow: [];
+  resetSearch: [];
   toggleStatFilter: [filter: StatFilter];
 }>();
 
@@ -230,6 +231,9 @@ defineExpose({ focusSearchInput });
         />
         <button type="submit" :disabled="rowsLength === 0">{{ t("main.go") }}</button>
       </form>
+      <button class="reset-search-btn" type="button" @click="emit('resetSearch')">
+        {{ t("common.reset") }}
+      </button>
     </div>
   </div>
 </template>
