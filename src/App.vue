@@ -27,7 +27,10 @@ import EncodingCodeShiftDialog, {
 } from "./components/EncodingCodeShiftDialog.vue";
 import ExcelExportDialog from "./components/ExcelExportDialog.vue";
 import ExcelImportDialog from "./components/ExcelImportDialog.vue";
-import FindReplaceBar, { type FindReplaceColumn } from "./components/FindReplaceBar.vue";
+import FindReplaceBar, {
+  type FindReplaceColumn,
+  type FindReplaceScope,
+} from "./components/FindReplaceBar.vue";
 import GoToRowDialog from "./components/GoToRowDialog.vue";
 import InsertRowsDialog from "./components/InsertRowsDialog.vue";
 import LanguageDialog from "./components/LanguageDialog.vue";
@@ -61,6 +64,7 @@ import {
   topPanelVisibleStorageKey,
   virtualOverscanRows,
 } from "./constants";
+import { parseClipboardTable } from "./clipboardTable";
 import {
   buildXlsxWorkbook,
   ensureXlsxExtension,
@@ -125,6 +129,7 @@ const findReplaceQuery = ref("");
 const findReplaceReplacement = ref("");
 const findReplaceMatchMode = ref<TextMatchMode>("contains");
 const isFindReplaceCaseSensitive = ref(false);
+const findReplaceScope = ref<FindReplaceScope>("filtered");
 const findReplaceColumns = ref<TextSearchKey[]>(textSearchColumns.map((column) => column.key));
 const currentFindMatchIndex = ref(0);
 const isGoToRowDialogOpen = ref(false);
@@ -252,6 +257,22 @@ const rowHeights = ref<Record<number, number>>({});
 const selectedSearchColumns = ref<TextSearchKey[]>(
   textSearchColumns.map((column) => column.key),
 );
+type MainTableCellColumn = Exclude<keyof SentenceRow, "state">;
+type TableInteractionMode = "edit" | "select";
+type MainTableCell = { columnKey: MainTableCellColumn; rowIndex: number };
+const tableInteractionMode = ref<TableInteractionMode>("edit");
+const selectedTableCells = ref<Set<string>>(new Set());
+const activeTableCell = ref<MainTableCell | null>(null);
+const tableCellSelectionAnchor = ref<MainTableCell | null>(null);
+const editingTableCell = ref<MainTableCell | null>(null);
+const isTableKeyboardActive = ref(false);
+const isDraggingTableCellSelection = ref(false);
+const isDiscontiguousCellClickSelectionEnabled = false;
+const focusedPasteCell = ref<{ columnKey: keyof SentenceRow; rowIndex: number } | null>(null);
+let tableCellAutoScrollFrame: number | undefined;
+let tableCellDragPointerX = 0;
+let tableCellDragPointerY = 0;
+let tableCellAutoScrollStartedAt = 0;
 
 // Most user-facing state lives in this component because the table, filters,
 // import/export dialogs, and AI flow all need the same row list. Keep helpers
@@ -288,6 +309,7 @@ let unlistenCodeShift: UnlistenFn | undefined;
 let unlistenInsertRows: UnlistenFn | undefined;
 let unlistenToggleMainColumnVisibility: UnlistenFn | undefined;
 let unlistenToggleMainTopPanel: UnlistenFn | undefined;
+let unlistenToggleMainTableMode: UnlistenFn | undefined;
 let pendingEditSnapshot: string | null = null;
 let columnDragTimer: number | undefined;
 let draggedColumnKey: ColumnKey | null = null;
@@ -333,6 +355,7 @@ const appShellClasses = computed(() => [
   `theme-${effectiveThemeMode.value}`,
   { "top-panel-hidden": !isTopPanelVisible.value },
   { "platform-linux": isLinuxPlatform() },
+  { "table-select-mode": tableInteractionMode.value === "select" },
 ]);
 
 const canSaveJson = computed(() => rows.value.length > 0 && !isSaving.value);
@@ -437,7 +460,22 @@ const findReplaceMatches = computed<FindReplaceMatch[]>(() => {
 
   const matches: FindReplaceMatch[] = [];
   filteredRows.value.forEach(({ row, index }, filteredIndex) => {
+    const rowId = getRowIdentity(row);
+    if (
+      findReplaceScope.value === "selectedRows" &&
+      !selectedRowIds.value.has(rowId)
+    ) {
+      return;
+    }
+
     for (const columnKey of activeColumns) {
+      if (
+        findReplaceScope.value === "selectedCells" &&
+        !selectedTableCells.value.has(tableCellKey(index, columnKey))
+      ) {
+        continue;
+      }
+
       if (findReplaceCellMatches(row[columnKey], query)) {
         matches.push({ columnKey, filteredIndex, row, rowIndex: index });
       }
@@ -449,6 +487,12 @@ const findReplaceMatches = computed<FindReplaceMatch[]>(() => {
 
 const currentFindReplaceMatch = computed(
   () => findReplaceMatches.value[currentFindMatchIndex.value] ?? null,
+);
+
+const selectableTableColumns = computed(() =>
+  displayedColumns.value
+    .filter((column) => column.key !== "row_number" && column.key !== "state")
+    .map((column) => column.key as MainTableCellColumn),
 );
 
 const duplicateTitleAddressIds = computed(() => {
@@ -566,6 +610,9 @@ window.addEventListener("keydown", handleWindowsMenuShortcut);
 window.addEventListener("keydown", handleAiTranslationModeKey);
 window.addEventListener("keyup", handleAiTranslationModeKey);
 window.addEventListener("blur", resetAiTranslationModeKey);
+window.addEventListener("pointerdown", handleWindowPointerDownForTableKeyboard, true);
+window.addEventListener("mousemove", handleWindowTableCellDragMouseMove);
+window.addEventListener("mouseup", endTableCellDragSelection);
 systemThemeQuery.addEventListener("change", handleSystemThemeChange);
 
 watch(
@@ -713,6 +760,20 @@ watch(renderedRows, () => {
   });
 });
 
+watch(
+  () => displayedColumns.value.map((column) => column.key).join("|"),
+  () => {
+    clearTableCellSelection();
+  },
+);
+
+watch(
+  () => filteredRows.value.map(({ index }) => index).join("|"),
+  () => {
+    clearTableCellSelection();
+  },
+);
+
 onBeforeUnmount(() => {
   cancelColumnReorder();
   rowResizeObservers.forEach((observer) => observer.disconnect());
@@ -747,6 +808,7 @@ onBeforeUnmount(() => {
   unlistenInsertRows?.();
   unlistenToggleMainColumnVisibility?.();
   unlistenToggleMainTopPanel?.();
+  unlistenToggleMainTableMode?.();
   window.removeEventListener("focus", handleWindowFocus);
   window.removeEventListener("keydown", handleGlobalShortcut);
   window.removeEventListener("keydown", handleWindowsMenuShortcut);
@@ -754,6 +816,10 @@ onBeforeUnmount(() => {
   systemThemeQuery.removeEventListener("change", handleSystemThemeChange);
   window.removeEventListener("keyup", handleAiTranslationModeKey);
   window.removeEventListener("blur", resetAiTranslationModeKey);
+  window.removeEventListener("pointerdown", handleWindowPointerDownForTableKeyboard, true);
+  window.removeEventListener("mousemove", handleWindowTableCellDragMouseMove);
+  window.removeEventListener("mouseup", endTableCellDragSelection);
+  stopTableCellDragAutoScroll();
 });
 
 async function openFilePicker() {
@@ -795,6 +861,63 @@ function resetAiTranslationModeKey() {
 }
 
 function handleGlobalShortcut(event: KeyboardEvent) {
+  if (event.key === "Escape" && editableEventTarget(event.target)) {
+    event.preventDefault();
+    (event.target as HTMLElement).blur();
+    exitTableCellEdit();
+    return;
+  }
+
+  if (event.key === "Escape" && isSearchOverlayOpen.value) {
+    event.preventDefault();
+    closeSearchOverlay();
+    return;
+  }
+
+  if (
+    tableInteractionMode.value === "select" &&
+    editingTableCell.value &&
+    editableEventTarget(event.target)
+  ) {
+    return;
+  }
+
+  if (
+    event.key === "Escape" &&
+    tableInteractionMode.value === "select" &&
+    !hasOpenMainDialog() &&
+    (selectedTableCells.value.size > 0 || selectedRowIds.value.size > 0)
+  ) {
+    event.preventDefault();
+    clearSelectedRows();
+    statusMessage.value = t("message.deselectedAllRows");
+    errorMessage.value = "";
+    return;
+  }
+
+  if (
+    tableInteractionMode.value === "select" &&
+    !isSearchOverlayOpen.value &&
+    !hasOpenMainDialog() &&
+    !hasActiveMainDialogTask() &&
+    isTableSelectionKeyboardTarget(event) &&
+    handleTableSelectionKeydown(event)
+  ) {
+    return;
+  }
+
+  if (
+    (event.key === "t" || event.key === "T") &&
+    !event.ctrlKey &&
+    !event.metaKey &&
+    !event.altKey &&
+    !editableEventTarget(event.target)
+  ) {
+    event.preventDefault();
+    toggleTableInteractionMode();
+    return;
+  }
+
   if (shortcutMatches(event, "open_search_panel", isMacPlatform())) {
     event.preventDefault();
     if (hasOpenMainDialog()) return;
@@ -802,10 +925,6 @@ function handleGlobalShortcut(event: KeyboardEvent) {
     return;
   }
 
-  if (event.key === "Escape" && isSearchOverlayOpen.value) {
-    event.preventDefault();
-    closeSearchOverlay();
-  }
 }
 
 function openSearchOverlay() {
@@ -1191,6 +1310,16 @@ function registerMenuListeners() {
     .catch((error) => {
       console.warn("Failed to register top panel menu listener.", error);
     });
+
+  listen("toggle-main-table-mode", () => {
+    toggleTableInteractionMode();
+  })
+    .then((unlisten) => {
+      unlistenToggleMainTableMode = unlisten;
+    })
+    .catch((error) => {
+      console.warn("Failed to register table mode menu listener.", error);
+    });
 }
 
 type MainDialog =
@@ -1495,6 +1624,7 @@ function applySelectedAiTranslationResultsWithOptions() {
   if (!result || selectedAiTranslationTaskIds.value.size === 0) return;
 
   const selectedIds = selectedAiTranslationTaskIds.value;
+  const historySnapshot = createTableSnapshot();
   const nextRows = rows.value.map((row) => ({ ...row }));
   const target = aiTranslationApplyTarget.value;
   const applyMode = aiTranslationApplyMode.value;
@@ -1525,7 +1655,7 @@ function applySelectedAiTranslationResultsWithOptions() {
     return;
   }
 
-  recordHistoryStep(createTableSnapshot());
+  recordHistoryStep(historySnapshot);
   rows.value = nextRows;
   aiTranslationSession.value = {
     ...result,
@@ -2150,11 +2280,13 @@ function recordHistoryStep(snapshot = createTableSnapshot()) {
 
   undoStack.value = pushHistorySnapshot(undoStack.value, snapshot);
   redoStack.value = [];
+  syncHistoryMenuState();
 }
 
 function recordCurrentStateForUndo() {
   undoStack.value = pushHistorySnapshot(undoStack.value, createTableSnapshot());
   redoStack.value = [];
+  syncHistoryMenuState();
 }
 
 function flushPendingTableEdit() {
@@ -2174,6 +2306,7 @@ function undoTableChange() {
   undoStack.value = undoStack.value.slice(0, -1);
   redoStack.value = pushHistorySnapshot(redoStack.value, currentSnapshot);
   restoreTableSnapshot(snapshot);
+  syncHistoryMenuState();
   statusMessage.value = t("message.undidTableChange");
 }
 
@@ -2186,6 +2319,7 @@ function redoTableChange() {
   redoStack.value = redoStack.value.slice(0, -1);
   undoStack.value = pushHistorySnapshot(undoStack.value, currentSnapshot);
   restoreTableSnapshot(snapshot);
+  syncHistoryMenuState();
   statusMessage.value = t("message.redidTableChange");
 }
 
@@ -3076,6 +3210,68 @@ function confirmInsertRows() {
   errorMessage.value = "";
 }
 
+async function pasteClipboardAsTable() {
+  const target = activeTableCell.value ?? focusedPasteCell.value;
+  if (!target) {
+    statusMessage.value = t("message.noPasteTarget");
+    errorMessage.value = "";
+    return;
+  }
+
+  let text = "";
+  try {
+    if (!navigator.clipboard?.readText) throw new Error(t("message.clipboardReadUnavailable"));
+    text = await navigator.clipboard.readText();
+  } catch (error) {
+    errorMessage.value =
+      error instanceof Error ? error.message : t("message.clipboardReadUnavailable");
+    statusMessage.value = "";
+    return;
+  }
+
+  if (text === "") return;
+
+  const table = parseClipboardTable(text);
+
+  const pasteColumns = displayedColumns.value
+    .filter((column) => column.key !== "row_number" && column.key !== "state")
+    .map((column) => column.key as Exclude<keyof SentenceRow, "state">);
+  const startColumnIndex = pasteColumns.indexOf(
+    target.columnKey as Exclude<keyof SentenceRow, "state">,
+  );
+  if (startColumnIndex === -1) {
+    statusMessage.value = t("message.noPasteTarget");
+    errorMessage.value = "";
+    return;
+  }
+
+  recordCurrentStateForUndo();
+  pendingEditSnapshot = null;
+
+  const requiredRows = target.rowIndex + table.length - rows.value.length;
+  if (requiredRows > 0) {
+    rows.value.push(...Array.from({ length: requiredRows }, createEmptyRow));
+  }
+
+  let changedCount = 0;
+  table.forEach((pasteRow, pasteRowOffset) => {
+    const targetRow = rows.value[target.rowIndex + pasteRowOffset];
+    if (!targetRow) return;
+
+    pasteRow.forEach((value, pasteColumnOffset) => {
+      const targetColumn = pasteColumns[startColumnIndex + pasteColumnOffset];
+      if (!targetColumn) return;
+      targetRow[targetColumn] = value;
+      changedCount += 1;
+    });
+  });
+
+  rows.value = [...rows.value];
+  markStatSnapshotDirty();
+  statusMessage.value = `${t("message.pastedCells")}: ${changedCount}.`;
+  errorMessage.value = "";
+}
+
 async function clearRows() {
   if (rows.value.length === 0) return;
   if (isClearRowsConfirmOpen.value) return;
@@ -3172,6 +3368,541 @@ function openBulkStateDialog() {
   }
 
   if (!openMainDialog("bulkState")) return;
+}
+
+function focusPasteCell(rowIndex: number, columnKey: keyof SentenceRow) {
+  focusedPasteCell.value = { columnKey, rowIndex };
+}
+
+function editableEventTarget(target: EventTarget | null) {
+  const element = target as HTMLElement | null;
+  return Boolean(element?.closest("input, textarea, select"));
+}
+
+function interactiveEventTarget(target: EventTarget | null) {
+  const element = target as HTMLElement | null;
+  return Boolean(element?.closest("button, input, textarea, select, [contenteditable='true']"));
+}
+
+function handleWindowPointerDownForTableKeyboard(event: PointerEvent) {
+  const wrapper = tableWrap.value;
+  const targetNode = event.target instanceof Node ? event.target : null;
+  if (!wrapper || !targetNode || !wrapper.contains(targetNode)) {
+    isTableKeyboardActive.value = false;
+  }
+}
+
+function focusTableKeyboardSurface() {
+  isTableKeyboardActive.value = true;
+  nextTick(() => {
+    if (!editingTableCell.value) {
+      tableWrap.value?.focus({ preventScroll: true });
+    }
+  });
+}
+
+function isTableSelectionKeyboardTarget(event: KeyboardEvent) {
+  const wrapper = tableWrap.value;
+  if (!wrapper || !isTableKeyboardActive.value || interactiveEventTarget(event.target)) {
+    return false;
+  }
+
+  const targetNode = event.target instanceof Node ? event.target : null;
+  const activeNode = document.activeElement;
+  return (
+    (targetNode !== null && wrapper.contains(targetNode)) ||
+    (activeNode !== null && wrapper.contains(activeNode))
+  );
+}
+
+function tableCellKey(rowIndex: number, columnKey: MainTableCellColumn) {
+  return `${rowIndex}:${columnKey}`;
+}
+
+function parseTableCellKey(key: string): MainTableCell | null {
+  const separatorIndex = key.indexOf(":");
+  if (separatorIndex === -1) return null;
+  const rowIndex = Number.parseInt(key.slice(0, separatorIndex), 10);
+  const columnKey = key.slice(separatorIndex + 1) as MainTableCellColumn;
+  if (!Number.isInteger(rowIndex) || !selectableTableColumns.value.includes(columnKey)) {
+    return null;
+  }
+  return { rowIndex, columnKey };
+}
+
+function visibleRowIndicesBetween(startRowIndex: number, endRowIndex: number) {
+  const visibleRows = filteredRows.value.map((item) => item.index);
+  const startVisibleIndex = visibleRows.indexOf(startRowIndex);
+  const endVisibleIndex = visibleRows.indexOf(endRowIndex);
+  if (startVisibleIndex === -1 || endVisibleIndex === -1) {
+    const minRowIndex = Math.min(startRowIndex, endRowIndex);
+    const maxRowIndex = Math.max(startRowIndex, endRowIndex);
+    return visibleRows.filter((rowIndex) => rowIndex >= minRowIndex && rowIndex <= maxRowIndex);
+  }
+
+  const from = Math.min(startVisibleIndex, endVisibleIndex);
+  const to = Math.max(startVisibleIndex, endVisibleIndex);
+  return visibleRows.slice(from, to + 1);
+}
+
+function tableCellRange(anchor: MainTableCell, cell: MainTableCell) {
+  const columns = selectableTableColumns.value;
+  const anchorColumnIndex = columns.indexOf(anchor.columnKey);
+  const cellColumnIndex = columns.indexOf(cell.columnKey);
+  if (anchorColumnIndex === -1 || cellColumnIndex === -1) return new Set<string>();
+
+  const fromColumn = Math.min(anchorColumnIndex, cellColumnIndex);
+  const toColumn = Math.max(anchorColumnIndex, cellColumnIndex);
+  const nextSelection = new Set<string>();
+  visibleRowIndicesBetween(anchor.rowIndex, cell.rowIndex).forEach((rowIndex) => {
+    columns.slice(fromColumn, toColumn + 1).forEach((columnKey) => {
+      nextSelection.add(tableCellKey(rowIndex, columnKey));
+    });
+  });
+  return nextSelection;
+}
+
+function selectTableCell(cell: MainTableCell, extendSelection = false) {
+  exitTableCellEdit();
+  focusTableKeyboardSurface();
+  activeTableCell.value = cell;
+  focusedPasteCell.value = cell;
+
+  if (extendSelection && tableCellSelectionAnchor.value) {
+    selectedTableCells.value = tableCellRange(tableCellSelectionAnchor.value, cell);
+    syncRowSelectionFromTableCells();
+    return;
+  }
+
+  tableCellSelectionAnchor.value = cell;
+  selectedTableCells.value = new Set([tableCellKey(cell.rowIndex, cell.columnKey)]);
+  syncRowSelectionFromTableCells();
+}
+
+function firstTableCellFromSelection(selection: Set<string>) {
+  for (const key of selection) {
+    const cell = parseTableCellKey(key);
+    if (cell) return cell;
+  }
+  return null;
+}
+
+function toggleTableCellInSelection(cell: MainTableCell) {
+  exitTableCellEdit();
+  const key = tableCellKey(cell.rowIndex, cell.columnKey);
+  const nextSelection = new Set(selectedTableCells.value);
+
+  if (nextSelection.has(key)) {
+    nextSelection.delete(key);
+    const fallbackCell = firstTableCellFromSelection(nextSelection);
+    activeTableCell.value = fallbackCell;
+    tableCellSelectionAnchor.value = fallbackCell;
+    focusedPasteCell.value = fallbackCell;
+  } else {
+    nextSelection.add(key);
+    activeTableCell.value = cell;
+    tableCellSelectionAnchor.value = cell;
+    focusedPasteCell.value = cell;
+  }
+
+  selectedTableCells.value = nextSelection;
+  syncRowSelectionFromTableCells();
+}
+
+function handleTableCellMouseDown(
+  rowIndex: number,
+  columnKey: MainTableCellColumn,
+  event: MouseEvent,
+) {
+  if (tableInteractionMode.value !== "select") return;
+  if (event.button !== 0) return;
+  const target = event.target as HTMLElement | null;
+  if (isTableCellEditing(rowIndex, columnKey) && target?.closest("textarea")) return;
+  event.preventDefault();
+  tableCellDragPointerX = event.clientX;
+  tableCellDragPointerY = event.clientY;
+
+  if (isDiscontiguousCellClickSelectionEnabled && (event.metaKey || event.ctrlKey) && !event.shiftKey) {
+    isDraggingTableCellSelection.value = false;
+    toggleTableCellInSelection({ rowIndex, columnKey });
+    return;
+  }
+
+  isDraggingTableCellSelection.value = true;
+  tableCellAutoScrollStartedAt = performance.now();
+  scheduleTableCellDragAutoScroll();
+  selectTableCell({ rowIndex, columnKey }, event.shiftKey);
+}
+
+function handleWindowTableCellDragMouseMove(event: MouseEvent) {
+  if (!isDraggingTableCellSelection.value) return;
+  tableCellDragPointerX = event.clientX;
+  tableCellDragPointerY = event.clientY;
+  scheduleTableCellDragAutoScroll();
+}
+
+function handleTableCellMouseMove(rowIndex: number, columnKey: MainTableCellColumn, event: MouseEvent) {
+  if (tableInteractionMode.value !== "select" || !isDraggingTableCellSelection.value) return;
+  if (!tableCellSelectionAnchor.value) return;
+  tableCellDragPointerX = event.clientX;
+  tableCellDragPointerY = event.clientY;
+  scheduleTableCellDragAutoScroll();
+  selectTableCell({ rowIndex, columnKey }, true);
+}
+
+function handleTableCellDoubleClick(rowIndex: number, columnKey: MainTableCellColumn, event: MouseEvent) {
+  if (tableInteractionMode.value !== "select") return;
+  event.preventDefault();
+  selectTableCell({ rowIndex, columnKey });
+  enterTableCellEdit({ rowIndex, columnKey });
+}
+
+function endTableCellDragSelection() {
+  isDraggingTableCellSelection.value = false;
+  tableCellAutoScrollStartedAt = 0;
+  stopTableCellDragAutoScroll();
+}
+
+function handleTableTextareaFocus(
+  rowIndex: number,
+  columnKey: MainTableCellColumn,
+  event: FocusEvent,
+) {
+  if (tableInteractionMode.value === "select") {
+    if (isTableCellEditing(rowIndex, columnKey)) {
+      focusPasteCell(rowIndex, columnKey);
+      return;
+    }
+    (event.target as HTMLTextAreaElement).blur();
+    selectTableCell({ rowIndex, columnKey });
+    return;
+  }
+
+  focusPasteCell(rowIndex, columnKey);
+}
+
+function handleTableTextareaBlur() {
+  exitTableCellEdit(false);
+  commitTableEdit();
+}
+
+function isTableCellSelected(rowIndex: number, columnKey: MainTableCellColumn) {
+  return selectedTableCells.value.has(tableCellKey(rowIndex, columnKey));
+}
+
+function isActiveTableCell(rowIndex: number, columnKey: MainTableCellColumn) {
+  return activeTableCell.value?.rowIndex === rowIndex && activeTableCell.value.columnKey === columnKey;
+}
+
+function isTableCellEditing(rowIndex: number, columnKey: MainTableCellColumn) {
+  return editingTableCell.value?.rowIndex === rowIndex && editingTableCell.value.columnKey === columnKey;
+}
+
+function enterTableCellEdit(cell: MainTableCell) {
+  editingTableCell.value = cell;
+  activeTableCell.value = cell;
+  focusedPasteCell.value = cell;
+  nextTick(() => {
+    const selector = `.textarea-cell[data-cell-row-index="${cell.rowIndex}"][data-cell-column="${cell.columnKey}"] textarea`;
+    const textarea = tableWrap.value?.querySelector<HTMLTextAreaElement>(selector);
+    textarea?.focus();
+    textarea?.select();
+  });
+}
+
+function exitTableCellEdit(blurTextarea = true) {
+  const editingCell = editingTableCell.value;
+  if (blurTextarea && editingCell) {
+    const selector = `.textarea-cell[data-cell-row-index="${editingCell.rowIndex}"][data-cell-column="${editingCell.columnKey}"] textarea`;
+    const textarea = tableWrap.value?.querySelector<HTMLTextAreaElement>(selector);
+    if (textarea && document.activeElement === textarea) {
+      textarea.blur();
+    }
+  }
+  editingTableCell.value = null;
+}
+
+function toggleTableInteractionMode() {
+  const nextMode: TableInteractionMode = tableInteractionMode.value === "edit" ? "select" : "edit";
+  tableInteractionMode.value = nextMode;
+  (document.activeElement as HTMLElement | null)?.blur();
+  statusMessage.value =
+    nextMode === "select" ? t("message.tableSelectMode") : t("message.tableEditMode");
+  errorMessage.value = "";
+
+  if (nextMode === "edit") {
+    clearTableCellSelection();
+    return;
+  }
+
+  if (nextMode === "select" && !activeTableCell.value) {
+    const firstVisibleRow = filteredRows.value[0];
+    const firstColumn = selectableTableColumns.value[0];
+    if (firstVisibleRow && firstColumn) {
+      selectTableCell({ rowIndex: firstVisibleRow.index, columnKey: firstColumn });
+    }
+  }
+}
+
+function clearTableCellSelection() {
+  const hadTableCellSelection = selectedTableCells.value.size > 0;
+  selectedTableCells.value = new Set();
+  activeTableCell.value = null;
+  tableCellSelectionAnchor.value = null;
+  editingTableCell.value = null;
+  isDraggingTableCellSelection.value = false;
+  tableCellAutoScrollStartedAt = 0;
+  stopTableCellDragAutoScroll();
+  if (hadTableCellSelection) {
+    selectedRowIds.value = new Set();
+    selectionAnchorRowId.value = null;
+  }
+}
+
+function syncRowSelectionFromTableCells() {
+  const nextSelectedIds = new Set<number>();
+  selectedTableCellList().forEach((cell) => {
+    const row = rows.value[cell.rowIndex];
+    if (row) nextSelectedIds.add(getRowIdentity(row));
+  });
+  selectedRowIds.value = nextSelectedIds;
+  selectionAnchorRowId.value = nextSelectedIds.values().next().value ?? null;
+}
+
+function scheduleTableCellDragAutoScroll() {
+  if (tableCellAutoScrollFrame !== undefined) return;
+  tableCellAutoScrollFrame = window.requestAnimationFrame(runTableCellDragAutoScroll);
+}
+
+function stopTableCellDragAutoScroll() {
+  if (tableCellAutoScrollFrame !== undefined) {
+    window.cancelAnimationFrame(tableCellAutoScrollFrame);
+    tableCellAutoScrollFrame = undefined;
+  }
+}
+
+function runTableCellDragAutoScroll() {
+  tableCellAutoScrollFrame = undefined;
+  if (!isDraggingTableCellSelection.value || !tableWrap.value) return;
+
+  const bounds = tableWrap.value.getBoundingClientRect();
+  const edgeSize = 56;
+  const topDistance = tableCellDragPointerY - bounds.top;
+  const bottomDistance = bounds.bottom - tableCellDragPointerY;
+  let delta = 0;
+
+  if (topDistance < edgeSize) {
+    delta = -tableCellDragAutoScrollStep(topDistance, edgeSize);
+  } else if (bottomDistance < edgeSize) {
+    delta = tableCellDragAutoScrollStep(bottomDistance, edgeSize);
+  }
+
+  if (delta !== 0) {
+    tableWrap.value.scrollTop += delta;
+    updateTableViewport();
+    updateTableCellDragSelectionFromPointer();
+  }
+  scheduleTableCellDragAutoScroll();
+}
+
+function tableCellDragAutoScrollStep(edgeDistance: number, edgeSize: number) {
+  const closeness = (edgeSize - Math.max(0, Math.min(edgeDistance, edgeSize))) / edgeSize;
+  const distanceBoost = closeness * closeness;
+  const elapsedMs = Math.max(0, performance.now() - tableCellAutoScrollStartedAt);
+  const timeBoost = Math.min(3.2, 1 + elapsedMs / 650);
+  return Math.max(2, Math.ceil((5 + distanceBoost * 18) * timeBoost));
+}
+
+function updateTableCellDragSelectionFromPointer() {
+  if (!tableCellSelectionAnchor.value) return;
+  const element = document
+    .elementFromPoint(tableCellDragPointerX, tableCellDragPointerY)
+    ?.closest<HTMLElement>(".textarea-cell[data-cell-row-index][data-cell-column]");
+  if (!element) return;
+  const rowIndex = Number.parseInt(element.dataset.cellRowIndex ?? "", 10);
+  const columnKey = element.dataset.cellColumn as MainTableCellColumn | undefined;
+  if (!Number.isInteger(rowIndex) || !columnKey || !selectableTableColumns.value.includes(columnKey)) {
+    return;
+  }
+  selectTableCell({ rowIndex, columnKey }, true);
+}
+
+function selectedTableCellList() {
+  return [...selectedTableCells.value]
+    .map(parseTableCellKey)
+    .filter((cell): cell is MainTableCell => cell !== null && rows.value[cell.rowIndex] !== undefined);
+}
+
+async function copySelectedTableCells() {
+  const cells = selectedTableCellList();
+  if (cells.length === 0) return;
+
+  const rowIndices = [...new Set(cells.map((cell) => cell.rowIndex))].sort((a, b) => a - b);
+  const columns = selectableTableColumns.value;
+  const selectedColumnIndexes = cells
+    .map((cell) => columns.indexOf(cell.columnKey))
+    .filter((index) => index >= 0);
+  const fromColumn = Math.min(...selectedColumnIndexes);
+  const toColumn = Math.max(...selectedColumnIndexes);
+  const selectedKeys = selectedTableCells.value;
+
+  const text = rowIndices
+    .map((rowIndex) =>
+      columns
+        .slice(fromColumn, toColumn + 1)
+        .map((columnKey) =>
+          selectedKeys.has(tableCellKey(rowIndex, columnKey))
+            ? spreadsheetCellText(rows.value[rowIndex]?.[columnKey] ?? "")
+            : "",
+        )
+        .join("\t"),
+    )
+    .join("\n");
+
+  try {
+    await copyText(text);
+    statusMessage.value = `${t("message.copiedSelectedRows")}: ${cells.length}.`;
+    errorMessage.value = "";
+  } catch (error) {
+    errorMessage.value =
+      error instanceof Error ? error.message : t("message.failedCopySelectedRows");
+    statusMessage.value = "";
+  }
+}
+
+function clearSelectedTableCells() {
+  const cells = selectedTableCellList();
+  if (cells.length === 0) return;
+
+  const changedCells = cells.filter((cell) => rows.value[cell.rowIndex][cell.columnKey] !== "");
+  if (changedCells.length === 0) return;
+
+  recordCurrentStateForUndo();
+  pendingEditSnapshot = null;
+  changedCells.forEach((cell) => {
+    rows.value[cell.rowIndex][cell.columnKey] = "";
+  });
+  rows.value = [...rows.value];
+  markStatSnapshotDirty();
+}
+
+function moveActiveTableCell(rowDelta: number, columnDelta: number, extendSelection: boolean) {
+  const visibleRows = filteredRows.value.map((item) => item.index);
+  const columns = selectableTableColumns.value;
+  if (visibleRows.length === 0 || columns.length === 0) return;
+
+  const currentCell = activeTableCell.value ?? {
+    rowIndex: visibleRows[0],
+    columnKey: columns[0],
+  };
+  const currentVisibleRowIndex = Math.max(0, visibleRows.indexOf(currentCell.rowIndex));
+  const currentColumnIndex = Math.max(0, columns.indexOf(currentCell.columnKey));
+  const nextVisibleRowIndex = Math.min(
+    visibleRows.length - 1,
+    Math.max(0, currentVisibleRowIndex + rowDelta),
+  );
+  const nextColumnIndex = Math.min(columns.length - 1, Math.max(0, currentColumnIndex + columnDelta));
+
+  selectTableCell(
+    { rowIndex: visibleRows[nextVisibleRowIndex], columnKey: columns[nextColumnIndex] },
+    extendSelection,
+  );
+  scrollTableCellRowIntoView(visibleRows[nextVisibleRowIndex]);
+}
+
+function scrollTableCellRowIntoView(rowIndex: number) {
+  const wrapper = tableWrap.value;
+  if (!wrapper) return;
+
+  const filteredIndex = filteredRows.value.findIndex((item) => item.index === rowIndex);
+  if (filteredIndex < 0) return;
+
+  const headerHeight = wrapper.querySelector<HTMLElement>(".header-row")?.offsetHeight ?? 0;
+  const rowTop = sumRowHeights(filteredRows.value, 0, filteredIndex);
+  const rowBottom = rowTop + rowHeight(filteredRows.value[filteredIndex].row);
+  const visibleTop = wrapper.scrollTop;
+  const visibleBottom = wrapper.scrollTop + wrapper.clientHeight - headerHeight;
+
+  if (rowTop < visibleTop) {
+    wrapper.scrollTop = rowTop;
+  } else if (rowBottom > visibleBottom) {
+    wrapper.scrollTop = Math.max(0, rowBottom - wrapper.clientHeight + headerHeight);
+  }
+  updateTableViewport();
+}
+
+function selectAllVisibleTableCells() {
+  exitTableCellEdit();
+  const columns = selectableTableColumns.value;
+  const nextSelection = new Set<string>();
+  filteredRows.value.forEach(({ index }) => {
+    columns.forEach((columnKey) => nextSelection.add(tableCellKey(index, columnKey)));
+  });
+  selectedTableCells.value = nextSelection;
+  syncRowSelectionFromTableCells();
+  const firstRow = filteredRows.value[0];
+  const firstColumn = columns[0];
+  if (firstRow && firstColumn) {
+    activeTableCell.value = { rowIndex: firstRow.index, columnKey: firstColumn };
+    tableCellSelectionAnchor.value = activeTableCell.value;
+    focusedPasteCell.value = activeTableCell.value;
+  }
+}
+
+function handleTableSelectionKeydown(event: KeyboardEvent) {
+  const key = event.key;
+  const commandKey = isMacPlatform() ? event.metaKey : event.ctrlKey;
+
+  if (commandKey && key.toLowerCase() === "a") {
+    event.preventDefault();
+    selectAllVisibleTableCells();
+    return true;
+  }
+
+  if (commandKey && key.toLowerCase() === "c") {
+    event.preventDefault();
+    void copySelectedTableCells();
+    return true;
+  }
+
+  if (commandKey && key.toLowerCase() === "v") {
+    event.preventDefault();
+    void pasteClipboardAsTable();
+    return true;
+  }
+
+  if (
+    (key === "Backspace" || key === "Delete") &&
+    !event.ctrlKey &&
+    !event.metaKey &&
+    !event.altKey &&
+    !event.shiftKey
+  ) {
+    event.preventDefault();
+    clearSelectedTableCells();
+    return true;
+  }
+
+  if (key === "Enter" && activeTableCell.value) {
+    event.preventDefault();
+    enterTableCellEdit(activeTableCell.value);
+    return true;
+  }
+
+  const movementByKey: Record<string, [number, number]> = {
+    ArrowUp: [-1, 0],
+    ArrowDown: [1, 0],
+    ArrowLeft: [0, -1],
+    ArrowRight: [0, 1],
+  };
+  const movement = movementByKey[key];
+  if (movement) {
+    event.preventDefault();
+    moveActiveTableCell(movement[0], movement[1], event.shiftKey);
+    return true;
+  }
+
+  return false;
 }
 
 function openBulkColumnDialog() {
@@ -3474,6 +4205,10 @@ function handleFilteredSelectionChange(event?: Event) {
 }
 
 function clearSelectedRows() {
+  if (selectedTableCells.value.size > 0) {
+    clearTableCellSelection();
+    return;
+  }
   selectedRowIds.value = new Set();
   selectionAnchorRowId.value = null;
 }
@@ -4292,6 +5027,10 @@ function finishColumnReorder(event: PointerEvent) {
   const sourceKey = draggedColumnKey;
   const targetKey = columnKeyFromPoint(lastColumnPointerX, lastColumnPointerY);
   cancelColumnReorder();
+  if (!sourceKey) {
+    if (targetKey) selectVisibleTableColumn(targetKey, event.shiftKey);
+    return;
+  }
   if (!sourceKey || !targetKey || sourceKey === targetKey || !movableColumn(targetKey)) return;
 
   const nextOrder = columnOrder.value.filter((key) => key !== sourceKey);
@@ -4300,6 +5039,47 @@ function finishColumnReorder(event: PointerEvent) {
   nextOrder.splice(targetIndex, 0, sourceKey);
   columnOrder.value = nextOrder;
   persistColumnOrder();
+}
+
+function selectVisibleTableColumn(columnKey: ColumnKey, extendSelection = false) {
+  if (tableInteractionMode.value !== "select") return;
+  if (columnKey === "row_number" || columnKey === "state") return;
+
+  const selectableColumn = columnKey as MainTableCellColumn;
+  if (!selectableTableColumns.value.includes(selectableColumn)) return;
+
+  exitTableCellEdit();
+  const columns = selectableTableColumns.value;
+  const anchorColumn = tableCellSelectionAnchor.value?.columnKey;
+  const anchorColumnIndex = anchorColumn ? columns.indexOf(anchorColumn) : -1;
+  const targetColumnIndex = columns.indexOf(selectableColumn);
+  const selectedColumns =
+    extendSelection && anchorColumnIndex >= 0
+      ? columns.slice(
+          Math.min(anchorColumnIndex, targetColumnIndex),
+          Math.max(anchorColumnIndex, targetColumnIndex) + 1,
+        )
+      : [selectableColumn];
+  const nextSelection = new Set<string>();
+  filteredRows.value.forEach(({ index }) => {
+    selectedColumns.forEach((selectedColumn) => {
+      nextSelection.add(tableCellKey(index, selectedColumn));
+    });
+  });
+  selectedTableCells.value = nextSelection;
+
+  const firstRow = filteredRows.value[0];
+  if (firstRow) {
+    activeTableCell.value = { rowIndex: firstRow.index, columnKey: selectableColumn };
+    tableCellSelectionAnchor.value = activeTableCell.value;
+    focusedPasteCell.value = activeTableCell.value;
+  } else {
+    activeTableCell.value = null;
+    tableCellSelectionAnchor.value = null;
+    focusedPasteCell.value = null;
+  }
+
+  syncRowSelectionFromTableCells();
 }
 
 function columnFontStyle(columnIndex: number) {
@@ -4432,6 +5212,7 @@ function syncHistoryMenuState() {
   invoke("set_history_menu_enabled", {
     canUndo: canUndoTableChange.value,
     canRedo: canRedoTableChange.value,
+    target: "main",
   }).catch((error) => {
     console.warn("Failed to sync history menu state.", error);
   });
@@ -4933,6 +5714,7 @@ function startResize(columnIndex: number, event: PointerEvent) {
       v-model:selected-columns="findReplaceColumns"
       v-model:match-mode="findReplaceMatchMode"
       v-model:case-sensitive="isFindReplaceCaseSensitive"
+      v-model:scope="findReplaceScope"
       :columns="availableFindReplaceColumns"
       :current-match-index="currentFindMatchIndex"
       :match-count="findReplaceMatches.length"
@@ -4947,6 +5729,7 @@ function startResize(columnIndex: number, event: PointerEvent) {
       ref="tableWrap"
       class="table-wrap"
       :aria-label="t('main.sentenceList')"
+      tabindex="0"
       @scroll="handleTableScroll"
     >
       <div class="sentence-grid header-row" :style="{ gridTemplateColumns }">
@@ -5148,6 +5931,7 @@ function startResize(columnIndex: number, event: PointerEvent) {
               <select
                 v-model="row.state"
                 aria-label="state"
+                :disabled="tableInteractionMode === 'select'"
                 @focus="beginTableEdit"
                 @change="commitSelectEdit"
                 @blur="commitTableEdit"
@@ -5160,19 +5944,34 @@ function startResize(columnIndex: number, event: PointerEvent) {
             <div
               v-else
               class="textarea-cell"
-              :class="{ 'find-current-cell': isCurrentFindReplaceCell(row, column.key) }"
+              :class="{
+                'find-current-cell': isCurrentFindReplaceCell(row, column.key),
+                'table-cell-selected': isTableCellSelected(rowIndex, column.key),
+                'table-cell-active': isActiveTableCell(rowIndex, column.key),
+                'table-cell-editing': isTableCellEditing(rowIndex, column.key),
+              }"
               :data-cell-column="column.key"
+              :data-cell-row-index="rowIndex"
               :style="sentenceCellStyle(column.key)"
+              @mousedown="handleTableCellMouseDown(rowIndex, column.key, $event)"
+              @mousemove="handleTableCellMouseMove(rowIndex, column.key, $event)"
+              @dblclick="handleTableCellDoubleClick(rowIndex, column.key, $event)"
             >
               <textarea
                 v-model="row[column.key]"
                 :aria-label="column.key"
                 :autocapitalize="disablesTextCorrection(column.key) ? 'off' : undefined"
                 :autocorrect="disablesTextCorrection(column.key) ? 'off' : undefined"
+                :readonly="tableInteractionMode === 'select' && !isTableCellEditing(rowIndex, column.key)"
                 :spellcheck="disablesTextCorrection(column.key) ? false : undefined"
-                @focus="beginTableEdit"
+                :tabindex="
+                  tableInteractionMode === 'select' && !isTableCellEditing(rowIndex, column.key)
+                    ? -1
+                    : 0
+                "
+                @focus="handleTableTextareaFocus(rowIndex, column.key, $event)"
                 @input="markStatSnapshotDirty"
-                @blur="commitTableEdit"
+                @blur="handleTableTextareaBlur"
               />
               <div class="newline-hints" aria-hidden="true">
                 <template
@@ -6300,6 +7099,10 @@ button {
   background: var(--panel-bg);
 }
 
+.table-wrap:focus {
+  outline: none;
+}
+
 .sentence-grid {
   display: grid;
   min-width: max-content;
@@ -6496,6 +7299,43 @@ button {
   background: var(--warning-bg);
 }
 
+.textarea-cell.table-cell-selected {
+  background: color-mix(in srgb, var(--primary) 18%, var(--panel-bg));
+}
+
+.textarea-cell.table-cell-active {
+  outline: 2px solid var(--primary);
+  outline-offset: -2px;
+}
+
+.textarea-cell.table-cell-editing {
+  outline: 2px solid var(--success);
+  outline-offset: -2px;
+  background: color-mix(in srgb, var(--success) 14%, var(--panel-bg));
+}
+
+.table-select-mode .textarea-cell {
+  cursor: cell;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.table-select-mode .textarea-cell > textarea {
+  cursor: cell;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.table-select-mode .textarea-cell.table-cell-editing > textarea {
+  cursor: text;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.table-select-mode .textarea-cell.table-cell-editing > textarea:focus {
+  box-shadow: inset 0 0 0 2px var(--success);
+}
+
 .table-end-spacer {
   min-height: 42px;
   background: var(--panel-bg);
@@ -6650,6 +7490,10 @@ button {
   z-index: 3;
   outline: none;
   box-shadow: inset 0 0 0 2px var(--primary);
+}
+
+.table-select-mode .textarea-cell.table-cell-editing > textarea:focus {
+  box-shadow: inset 0 0 0 2px var(--success);
 }
 
 .empty-state {

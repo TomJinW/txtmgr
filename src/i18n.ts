@@ -44,6 +44,10 @@ type TranslationKey =
   | "find.replacePlaceholder"
   | "find.match"
   | "find.matches"
+  | "find.scope"
+  | "find.scopeFiltered"
+  | "find.scopeSelectedRows"
+  | "find.scopeSelectedCells"
   | "find.searchColumns"
   | "find.previous"
   | "find.next"
@@ -205,6 +209,11 @@ type TranslationKey =
   | "message.deleteSelectedConfirmSuffix"
   | "message.deletedSelected"
   | "message.copiedSelectedRows"
+  | "message.pastedCells"
+  | "message.clipboardReadUnavailable"
+  | "message.noPasteTarget"
+  | "message.tableEditMode"
+  | "message.tableSelectMode"
   | "message.failedCopySelectedRows"
   | "message.selectedFilteredRows"
   | "message.deselectedAllRows"
@@ -479,11 +488,15 @@ const translations: Record<AppLanguage, Record<TranslationKey, string>> = {
     "find.replacePlaceholder": "Replacement...",
     "find.match": "Match",
     "find.matches": "Matches",
+    "find.scope": "Scope",
+    "find.scopeFiltered": "Filtered rows",
+    "find.scopeSelectedRows": "Selected rows",
+    "find.scopeSelectedCells": "Selected cells",
     "find.searchColumns": "Search columns",
     "find.previous": "Previous",
     "find.next": "Next",
     "find.replaceAll": "Replace All",
-    "find.replaceAllConfirm": "Replace all matches in the current filtered rows?",
+    "find.replaceAllConfirm": "Replace all matches in the current find scope?",
     "find.replaceAllTitle": "Replace All",
     "find.replacedCells": "Replaced cells",
     "find.noMatch": "No matches found.",
@@ -509,8 +522,8 @@ const translations: Record<AppLanguage, Record<TranslationKey, string>> = {
     "main.importExcel": "Import Excel",
     "main.exportExcel": "Export Excel",
     "main.clearList": "Clear List",
-    "main.deleteSelected": "Delete Selected",
-    "main.copySelected": "Copy Selected",
+    "main.deleteSelected": "Delete Selected Rows",
+    "main.copySelected": "Copy Selected Rows",
     "main.selectAllFiltered": "Select Filtered Rows",
     "main.deselectAll": "Deselect All",
     "main.noJsonFileLoaded": "No JSON file loaded",
@@ -634,12 +647,17 @@ const translations: Record<AppLanguage, Record<TranslationKey, string>> = {
     "message.noMatchingCharactersFound": "No matching characters found",
     "message.countedItemsFromRows": "Counted items from rows",
     "message.notCheckedYet": "Not checked yet.",
-    "message.clearListConfirm": "Clear the entire list? This cannot be undone.",
+    "message.clearListConfirm": "Clear the entire list? This can be undone once.",
     "message.listCleared": "List cleared.",
     "message.deleteSelectedConfirmPrefix": "Delete",
-    "message.deleteSelectedConfirmSuffix": "selected row(s)? This cannot be undone.",
+    "message.deleteSelectedConfirmSuffix": "selected row(s)? This can be undone once.",
     "message.deletedSelected": "Deleted selected rows",
     "message.copiedSelectedRows": "Copied selected rows",
+    "message.pastedCells": "Pasted cells",
+    "message.clipboardReadUnavailable": "Clipboard read is unavailable.",
+    "message.noPasteTarget": "Select a table cell before pasting as table.",
+    "message.tableEditMode": "Table edit mode. Press T while not editing text to switch interaction mode.",
+    "message.tableSelectMode": "Table select mode. Press T while not editing text to switch interaction mode.",
     "message.failedCopySelectedRows": "Failed to copy selected rows.",
     "message.selectedFilteredRows": "Selected filtered rows",
     "message.deselectedAllRows": "Deselected all rows.",
@@ -872,7 +890,7 @@ const translations: Record<AppLanguage, Record<TranslationKey, string>> = {
     "bulk.value": "Value",
     "bulk.columnConfirmPrefix": "Change",
     "bulk.columnConfirmMiddle": "selected row(s) column",
-    "bulk.columnConfirmSuffix": "? This cannot be undone.",
+    "bulk.columnConfirmSuffix": "? This can be undone once.",
     "bulk.changedColumnPrefix": "Changed selected rows",
   },
   "zh-Hans": {
@@ -913,11 +931,15 @@ const translations: Record<AppLanguage, Record<TranslationKey, string>> = {
     "find.replacePlaceholder": "替换为...",
     "find.match": "匹配",
     "find.matches": "匹配项",
+    "find.scope": "范围",
+    "find.scopeFiltered": "过滤行",
+    "find.scopeSelectedRows": "选中行",
+    "find.scopeSelectedCells": "选中单元格",
     "find.searchColumns": "搜索列",
     "find.previous": "上一个",
     "find.next": "下一个",
     "find.replaceAll": "全部替换",
-    "find.replaceAllConfirm": "要替换当前过滤行里的所有匹配项吗？",
+    "find.replaceAllConfirm": "要替换当前查找范围里的所有匹配项吗？",
     "find.replaceAllTitle": "全部替换",
     "find.replacedCells": "已替换单元格",
     "find.noMatch": "没有找到匹配项。",
@@ -943,8 +965,8 @@ const translations: Record<AppLanguage, Record<TranslationKey, string>> = {
     "main.importExcel": "导入 Excel",
     "main.exportExcel": "导出 Excel",
     "main.clearList": "清空列表",
-    "main.deleteSelected": "删除选中",
-    "main.copySelected": "复制选中",
+    "main.deleteSelected": "删除选中行",
+    "main.copySelected": "复制选中行",
     "main.selectAllFiltered": "全选过滤结果",
     "main.deselectAll": "全不选",
     "main.noJsonFileLoaded": "未读取 JSON 文件",
@@ -1068,12 +1090,17 @@ const translations: Record<AppLanguage, Record<TranslationKey, string>> = {
     "message.noMatchingCharactersFound": "没有找到匹配字符",
     "message.countedItemsFromRows": "已统计项目，来源行数",
     "message.notCheckedYet": "尚未检查。",
-    "message.clearListConfirm": "清空整个列表？这个操作不能撤销。",
+    "message.clearListConfirm": "清空整个列表？这个操作可以撤销一次。",
     "message.listCleared": "列表已清空。",
     "message.deleteSelectedConfirmPrefix": "删除",
-    "message.deleteSelectedConfirmSuffix": "个选中行？这个操作不能撤销。",
+    "message.deleteSelectedConfirmSuffix": "个选中行？这个操作可以撤销一次。",
     "message.deletedSelected": "已删除选中行",
     "message.copiedSelectedRows": "已复制选中行",
+    "message.pastedCells": "已粘贴单元格",
+    "message.clipboardReadUnavailable": "无法读取剪贴板。",
+    "message.noPasteTarget": "请先选中一个表格单元格，再粘贴为表格。",
+    "message.tableEditMode": "表格编辑模式。非编辑文本状态下按 T 切换交互模式。",
+    "message.tableSelectMode": "表格选择模式。非编辑文本状态下按 T 切换交互模式。",
     "message.failedCopySelectedRows": "复制选中行失败。",
     "message.selectedFilteredRows": "已选择过滤结果",
     "message.deselectedAllRows": "已取消全部选择。",
@@ -1306,7 +1333,7 @@ const translations: Record<AppLanguage, Record<TranslationKey, string>> = {
     "bulk.value": "值",
     "bulk.columnConfirmPrefix": "修改",
     "bulk.columnConfirmMiddle": "个选中行的列",
-    "bulk.columnConfirmSuffix": "？这个操作不能撤销。",
+    "bulk.columnConfirmSuffix": "？这个操作可以撤销一次。",
     "bulk.changedColumnPrefix": "已修改选中行",
   },
 };

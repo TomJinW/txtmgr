@@ -8,6 +8,8 @@ export type FindReplaceColumn = {
   label: string;
 };
 
+export type FindReplaceScope = "filtered" | "selectedRows" | "selectedCells";
+
 defineProps<{
   columns: FindReplaceColumn[];
   currentMatchIndex: number;
@@ -27,6 +29,7 @@ const replacement = defineModel<string>("replacement", { required: true });
 const selectedColumns = defineModel<string[]>("selectedColumns", { required: true });
 const matchMode = defineModel<TextMatchMode>("matchMode", { required: true });
 const caseSensitive = defineModel<boolean>("caseSensitive", { required: true });
+const scope = defineModel<FindReplaceScope>("scope", { required: true });
 const findInput = ref<HTMLInputElement | null>(null);
 
 watch(
@@ -72,6 +75,14 @@ function toggleColumn(columnKey: string) {
         <select v-model="matchMode">
           <option value="contains">{{ t("match.contains") }}</option>
           <option value="exact">{{ t("match.exact") }}</option>
+        </select>
+      </label>
+      <label class="compact-control">
+        <span>{{ t("find.scope") }}</span>
+        <select v-model="scope">
+          <option value="filtered">{{ t("find.scopeFiltered") }}</option>
+          <option value="selectedRows">{{ t("find.scopeSelectedRows") }}</option>
+          <option value="selectedCells">{{ t("find.scopeSelectedCells") }}</option>
         </select>
       </label>
       <label class="case-control">

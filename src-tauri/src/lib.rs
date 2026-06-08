@@ -23,6 +23,7 @@ const EXPORT_EXCEL_MENU_ID: &str = "export_excel";
 const IMPORT_SRT_MENU_ID: &str = "import_srt";
 const EXPORT_SRT_MENU_ID: &str = "export_srt";
 const TOGGLE_MAIN_TOP_PANEL_MENU_ID: &str = "toggle_main_top_panel";
+const TOGGLE_MAIN_TABLE_MODE_MENU_ID: &str = "toggle_main_table_mode";
 const VIEW_COLUMN_TITLE_ADDR_MENU_ID: &str = "view_column_title_addr";
 const VIEW_COLUMN_ORIGINAL_TEXT_MENU_ID: &str = "view_column_original_text";
 const VIEW_COLUMN_TRANSLATED_TEXT_MENU_ID: &str = "view_column_translated_text";
@@ -64,6 +65,8 @@ const ENCODING_UNMAPPED_CHARACTERS_MENU_ID: &str = "encoding_unmapped_characters
 const ENCODING_UNUSED_ENCODINGS_MENU_ID: &str = "encoding_unused_encodings";
 const ENCODING_LINE_LENGTH_MENU_ID: &str = "encoding_line_length";
 const ENCODING_GO_TO_ROW_MENU_ID: &str = "encoding_go_to_row";
+const ENCODING_UNDO_TABLE_CHANGE_MENU_ID: &str = "encoding_undo_table_change";
+const ENCODING_REDO_TABLE_CHANGE_MENU_ID: &str = "encoding_redo_table_change";
 const ENCODING_CLEAR_LIST_MENU_ID: &str = "encoding_clear_list";
 const ENCODING_DELETE_SELECTED_MENU_ID: &str = "encoding_delete_selected";
 const ENCODING_COPY_SELECTED_MENU_ID: &str = "encoding_copy_selected";
@@ -73,6 +76,7 @@ const ENCODING_BULK_CHANGE_COLUMN_MENU_ID: &str = "encoding_bulk_change_column";
 const ENCODING_CODE_SHIFT_MENU_ID: &str = "encoding_code_shift";
 const ENCODING_INSERT_ROWS_MENU_ID: &str = "encoding_insert_rows";
 const ENCODING_TOGGLE_TOP_PANEL_MENU_ID: &str = "encoding_toggle_top_panel";
+const ENCODING_TOGGLE_TABLE_MODE_MENU_ID: &str = "encoding_toggle_table_mode";
 const LLM_API_KEY_SERVICE: &str = "txtmgr.llm";
 const LLM_API_KEY_ACCOUNT: &str = "default_api_key";
 
@@ -619,10 +623,23 @@ fn set_menu_item_enabled<R: Runtime>(
 }
 
 #[tauri::command]
-fn set_history_menu_enabled(app: AppHandle, can_undo: bool, can_redo: bool) -> Result<(), String> {
-    set_menu_item_enabled(&app, UNDO_TABLE_CHANGE_MENU_ID, can_undo)
+fn set_history_menu_enabled(
+    app: AppHandle,
+    target: Option<String>,
+    can_undo: bool,
+    can_redo: bool,
+) -> Result<(), String> {
+    let (undo_id, redo_id) = match target.as_deref() {
+        Some("encoding") => (
+            ENCODING_UNDO_TABLE_CHANGE_MENU_ID,
+            ENCODING_REDO_TABLE_CHANGE_MENU_ID,
+        ),
+        _ => (UNDO_TABLE_CHANGE_MENU_ID, REDO_TABLE_CHANGE_MENU_ID),
+    };
+
+    set_menu_item_enabled(&app, undo_id, can_undo)
         .map_err(|error| error.to_string())?;
-    set_menu_item_enabled(&app, REDO_TABLE_CHANGE_MENU_ID, can_redo)
+    set_menu_item_enabled(&app, redo_id, can_redo)
         .map_err(|error| error.to_string())?;
     Ok(())
 }
@@ -838,11 +855,18 @@ fn menu_label(language: &str, key: &str) -> &'static str {
                 "Show/Hide Controls"
             }
         }
+        "toggle_table_mode" => {
+            if zh {
+                "切换表格交互模式 (T)"
+            } else {
+                "Toggle Table Interaction Mode (T)"
+            }
+        }
         "find" => {
             if zh {
-                "查找..."
+                "筛选..."
             } else {
-                "Find..."
+                "Filter..."
             }
         }
         "find_replace" => {
@@ -969,16 +993,30 @@ fn menu_label(language: &str, key: &str) -> &'static str {
         }
         "delete_selected" => {
             if zh {
-                "删除选中"
+                "删除选中行"
             } else {
-                "Delete Selected"
+                "Delete Selected Rows"
             }
         }
         "copy_selected" => {
             if zh {
-                "复制选中"
+                "复制选中行"
             } else {
-                "Copy Selected"
+                "Copy Selected Rows"
+            }
+        }
+        "undo_table_change" => {
+            if zh {
+                "撤销表格修改"
+            } else {
+                "Undo Table Change"
+            }
+        }
+        "redo_table_change" => {
+            if zh {
+                "重做表格修改"
+            } else {
+                "Redo Table Change"
             }
         }
         "select_all_filtered" => {
@@ -1004,7 +1042,7 @@ fn menu_label(language: &str, key: &str) -> &'static str {
         }
         "bulk_column" => {
             if zh {
-                "批量修改选中列内容..."
+                "批量修改选中行内容..."
             } else {
                 "Change Selected Column..."
             }
@@ -1176,6 +1214,20 @@ fn build_encoding_menu_for<R: Runtime>(
     .accelerator(shortcut_accelerator(ENCODING_COPY_SELECTED_MENU_ID))
     .build(app)?;
 
+    let undo_table_change = MenuItemBuilder::with_id(
+        ENCODING_UNDO_TABLE_CHANGE_MENU_ID,
+        menu_label(language, "undo_table_change"),
+    )
+    .build(app)?;
+    undo_table_change.set_enabled(false)?;
+
+    let redo_table_change = MenuItemBuilder::with_id(
+        ENCODING_REDO_TABLE_CHANGE_MENU_ID,
+        menu_label(language, "redo_table_change"),
+    )
+    .build(app)?;
+    redo_table_change.set_enabled(false)?;
+
     let select_all_filtered = MenuItemBuilder::with_id(
         ENCODING_SELECT_ALL_FILTERED_MENU_ID,
         menu_label(language, "select_all_filtered"),
@@ -1253,6 +1305,12 @@ fn build_encoding_menu_for<R: Runtime>(
     .accelerator(shortcut_accelerator(ENCODING_TOGGLE_TOP_PANEL_MENU_ID))
     .build(app)?;
 
+    let toggle_table_mode = MenuItemBuilder::with_id(
+        ENCODING_TOGGLE_TABLE_MODE_MENU_ID,
+        menu_label(language, "toggle_table_mode"),
+    )
+    .build(app)?;
+
     let find = MenuItemBuilder::with_id(
         ENCODING_OPEN_SEARCH_PANEL_MENU_ID,
         menu_label(language, "find"),
@@ -1270,6 +1328,7 @@ fn build_encoding_menu_for<R: Runtime>(
     let tools_separator_1 = PredefinedMenuItem::separator(app)?;
     let tools_separator_2 = PredefinedMenuItem::separator(app)?;
     let tools_separator_3 = PredefinedMenuItem::separator(app)?;
+    let tools_separator_4 = PredefinedMenuItem::separator(app)?;
     let file_separator_1 = PredefinedMenuItem::separator(app)?;
     let file_separator_2 = PredefinedMenuItem::separator(app)?;
 
@@ -1286,6 +1345,9 @@ fn build_encoding_menu_for<R: Runtime>(
         .build()?;
 
     let tools_menu = SubmenuBuilder::new(app, menu_label(language, "tools"))
+        .item(&undo_table_change)
+        .item(&redo_table_change)
+        .item(&tools_separator_4)
         .item(&find)
         .item(&find_replace)
         .item(&go_to_row)
@@ -1308,6 +1370,7 @@ fn build_encoding_menu_for<R: Runtime>(
 
     let view_menu = SubmenuBuilder::new(app, menu_label(language, "view"))
         .item(&toggle_top_panel)
+        .item(&toggle_table_mode)
         .build()?;
 
     let statistics_menu = SubmenuBuilder::new(app, menu_label(language, "statistics"))
@@ -1413,6 +1476,20 @@ fn build_main_menu_for_with_columns<R: Runtime>(
     .accelerator(shortcut_accelerator(COPY_SELECTED_MENU_ID))
     .build(app)?;
 
+    let undo_table_change = MenuItemBuilder::with_id(
+        UNDO_TABLE_CHANGE_MENU_ID,
+        menu_label(language, "undo_table_change"),
+    )
+    .build(app)?;
+    undo_table_change.set_enabled(false)?;
+
+    let redo_table_change = MenuItemBuilder::with_id(
+        REDO_TABLE_CHANGE_MENU_ID,
+        menu_label(language, "redo_table_change"),
+    )
+    .build(app)?;
+    redo_table_change.set_enabled(false)?;
+
     let select_all_filtered = MenuItemBuilder::with_id(
         SELECT_ALL_FILTERED_MENU_ID,
         menu_label(language, "select_all_filtered"),
@@ -1472,6 +1549,12 @@ fn build_main_menu_for_with_columns<R: Runtime>(
     .accelerator(shortcut_accelerator(TOGGLE_MAIN_TOP_PANEL_MENU_ID))
     .build(app)?;
 
+    let toggle_table_mode = MenuItemBuilder::with_id(
+        TOGGLE_MAIN_TABLE_MODE_MENU_ID,
+        menu_label(language, "toggle_table_mode"),
+    )
+    .build(app)?;
+
     let find = MenuItemBuilder::with_id(OPEN_SEARCH_PANEL_MENU_ID, menu_label(language, "find"))
         .accelerator(shortcut_accelerator(OPEN_SEARCH_PANEL_MENU_ID))
         .build(app)?;
@@ -1487,6 +1570,7 @@ fn build_main_menu_for_with_columns<R: Runtime>(
     let tools_separator_2 = PredefinedMenuItem::separator(app)?;
     let tools_separator_3 = PredefinedMenuItem::separator(app)?;
     let tools_separator_4 = PredefinedMenuItem::separator(app)?;
+    let tools_separator_5 = PredefinedMenuItem::separator(app)?;
     let file_separator_1 = PredefinedMenuItem::separator(app)?;
     let file_separator_2 = PredefinedMenuItem::separator(app)?;
     let view_separator_1 = PredefinedMenuItem::separator(app)?;
@@ -1501,6 +1585,9 @@ fn build_main_menu_for_with_columns<R: Runtime>(
         .collect::<tauri::Result<Vec<_>>>()?;
 
     let tools_menu = SubmenuBuilder::new(app, menu_label(language, "tools"))
+        .item(&undo_table_change)
+        .item(&redo_table_change)
+        .item(&tools_separator_5)
         .item(&find)
         .item(&find_replace)
         .item(&go_to_row)
@@ -1544,6 +1631,7 @@ fn build_main_menu_for_with_columns<R: Runtime>(
 
     let view_menu = SubmenuBuilder::new(app, menu_label(language, "view"))
         .item(&toggle_top_panel)
+        .item(&toggle_table_mode)
         .item(&view_separator_1)
         .build()?;
     for item in &view_column_items {
@@ -1677,6 +1765,9 @@ fn emit_encoding_menu_event<R: Runtime>(app: &AppHandle<R>, menu_id: &str) {
         ENCODING_TOGGLE_TOP_PANEL_MENU_ID => {
             let _ = app.emit_to("encoding", "encoding-toggle-top-panel", ());
         }
+        ENCODING_TOGGLE_TABLE_MODE_MENU_ID => {
+            let _ = app.emit_to("encoding", "encoding-toggle-table-mode", ());
+        }
         ENCODING_CLEAR_LIST_MENU_ID => {
             let _ = app.emit_to("encoding", "encoding-clear-list", ());
         }
@@ -1685,6 +1776,12 @@ fn emit_encoding_menu_event<R: Runtime>(app: &AppHandle<R>, menu_id: &str) {
         }
         ENCODING_COPY_SELECTED_MENU_ID => {
             let _ = app.emit_to("encoding", "encoding-copy-selected", ());
+        }
+        ENCODING_UNDO_TABLE_CHANGE_MENU_ID => {
+            let _ = app.emit_to("encoding", "encoding-undo-table-change", ());
+        }
+        ENCODING_REDO_TABLE_CHANGE_MENU_ID => {
+            let _ = app.emit_to("encoding", "encoding-redo-table-change", ());
         }
         ENCODING_SELECT_ALL_FILTERED_MENU_ID => {
             let _ = app.emit_to("encoding", "encoding-select-all-filtered", ());
@@ -1785,6 +1882,9 @@ fn emit_main_menu_event<R: Runtime>(app: &AppHandle<R>, menu_id: &str) {
         }
         TOGGLE_MAIN_TOP_PANEL_MENU_ID => {
             let _ = app.emit_to("main", "toggle-main-top-panel", ());
+        }
+        TOGGLE_MAIN_TABLE_MODE_MENU_ID => {
+            let _ = app.emit_to("main", "toggle-main-table-mode", ());
         }
         OPEN_LANGUAGE_DIALOG_MENU_ID => {
             let _ = app.emit_to("main", "open-main-language-dialog", ());
@@ -1952,9 +2052,12 @@ pub fn run() {
                             | ENCODING_OPEN_SEARCH_PANEL_MENU_ID
                             | ENCODING_OPEN_FIND_REPLACE_MENU_ID
                             | ENCODING_TOGGLE_TOP_PANEL_MENU_ID
+                            | ENCODING_TOGGLE_TABLE_MODE_MENU_ID
                             | ENCODING_CLEAR_LIST_MENU_ID
                             | ENCODING_DELETE_SELECTED_MENU_ID
                             | ENCODING_COPY_SELECTED_MENU_ID
+                            | ENCODING_UNDO_TABLE_CHANGE_MENU_ID
+                            | ENCODING_REDO_TABLE_CHANGE_MENU_ID
                             | ENCODING_SELECT_ALL_FILTERED_MENU_ID
                             | ENCODING_DESELECT_ALL_ROWS_MENU_ID
                             | ENCODING_BULK_CHANGE_COLUMN_MENU_ID

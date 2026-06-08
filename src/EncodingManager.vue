@@ -15,7 +15,9 @@ import {
   draftStorageKey as sentenceDraftStorageKey,
   encodingExcelExportScopeStorageKey,
   encodingTextExportScopeStorageKey,
+  maxHistorySteps,
 } from "./constants";
+import { parseClipboardTable } from "./clipboardTable";
 import {
   currentLanguage,
   normalizeAppLanguage,
@@ -49,7 +51,10 @@ import EncodingExcelExportDialog from "./components/EncodingExcelExportDialog.vu
 import EncodingExportDialog from "./components/EncodingExportDialog.vue";
 import EncodingImportDialog from "./components/EncodingImportDialog.vue";
 import EncodingSearchControls from "./components/EncodingSearchControls.vue";
-import FindReplaceBar, { type FindReplaceColumn } from "./components/FindReplaceBar.vue";
+import FindReplaceBar, {
+  type FindReplaceColumn,
+  type FindReplaceScope,
+} from "./components/FindReplaceBar.vue";
 import GoToRowDialog from "./components/GoToRowDialog.vue";
 import InsertRowsDialog from "./components/InsertRowsDialog.vue";
 import LanguageDialog from "./components/LanguageDialog.vue";
@@ -98,6 +103,11 @@ type SentenceCoverageSource = {
   selected?: SentenceCoverageRow[];
 };
 
+type EncodingTableSnapshot = {
+  jsonPath: string;
+  rows: EncodingRow[];
+};
+
 const draftStorageKey = "txtmgr.encodingRows.v1";
 const columnWidthStorageKey = "txtmgr.encodingColumnWidths.v3";
 const columnFontSizeStorageKey = "txtmgr.encodingColumnFontSizes.v1";
@@ -140,6 +150,8 @@ const searchableColumns: (keyof EncodingRow)[] = [
 
 const rows = ref<EncodingRow[]>([]);
 const jsonPath = ref("");
+const undoStack = ref<string[]>([]);
+const redoStack = ref<string[]>([]);
 const columnWidths = ref(restoreColumnWidths());
 const columnFontSizes = ref(restoreColumnFontSizes());
 const columnOrder = ref<EncodingColumnKey[]>(restoreColumnOrder());
@@ -152,6 +164,21 @@ const selectedSearchColumns = ref<(keyof EncodingRow)[]>([...searchableColumns])
 const activeFilters = ref<EncodingFilter[]>([]);
 const selectedRowIds = ref<Set<number>>(new Set());
 const selectionAnchorRowId = ref<number | null>(null);
+type TableInteractionMode = "edit" | "select";
+type EncodingTableCell = { columnKey: keyof EncodingRow; rowIndex: number };
+const tableInteractionMode = ref<TableInteractionMode>("edit");
+const selectedTableCells = ref<Set<string>>(new Set());
+const activeTableCell = ref<EncodingTableCell | null>(null);
+const tableCellSelectionAnchor = ref<EncodingTableCell | null>(null);
+const editingTableCell = ref<EncodingTableCell | null>(null);
+const isTableKeyboardActive = ref(false);
+const isDraggingTableCellSelection = ref(false);
+const isDiscontiguousCellClickSelectionEnabled = false;
+const focusedPasteCell = ref<{ columnKey: keyof EncodingRow; rowIndex: number } | null>(null);
+let tableCellAutoScrollFrame: number | undefined;
+let tableCellDragPointerX = 0;
+let tableCellDragPointerY = 0;
+let tableCellAutoScrollStartedAt = 0;
 const bulkEditableColumns: { key: BulkEditableColumn; label: string }[] = [
   { key: "original_char", label: "char" },
   { key: "code", label: "code" },
@@ -176,6 +203,7 @@ const findReplaceQuery = ref("");
 const findReplaceReplacement = ref("");
 const findReplaceMatchMode = ref<"contains" | "exact">("contains");
 const isFindReplaceCaseSensitive = ref(false);
+const findReplaceScope = ref<FindReplaceScope>("filtered");
 const findReplaceColumns = ref<(keyof EncodingRow)[]>([...searchableColumns]);
 const currentFindMatchIndex = ref(0);
 const isGoToRowDialogOpen = ref(false);
@@ -321,12 +349,15 @@ let unlistenEncodingOpenGoToRow: UnlistenFn | undefined;
 let unlistenEncodingClearList: UnlistenFn | undefined;
 let unlistenEncodingDeleteSelected: UnlistenFn | undefined;
 let unlistenEncodingCopySelected: UnlistenFn | undefined;
+let unlistenEncodingUndoTableChange: UnlistenFn | undefined;
+let unlistenEncodingRedoTableChange: UnlistenFn | undefined;
 let unlistenEncodingSelectAllFiltered: UnlistenFn | undefined;
 let unlistenEncodingDeselectAllRows: UnlistenFn | undefined;
 let unlistenEncodingBulkColumn: UnlistenFn | undefined;
 let unlistenEncodingCodeShift: UnlistenFn | undefined;
 let unlistenEncodingInsertRows: UnlistenFn | undefined;
 let unlistenEncodingToggleTopPanel: UnlistenFn | undefined;
+let unlistenEncodingToggleTableMode: UnlistenFn | undefined;
 let unlistenSetLanguage: UnlistenFn | undefined;
 let unlistenOpenLanguageDialog: UnlistenFn | undefined;
 const rowResizeObservers = new Map<number, ResizeObserver>();
@@ -352,16 +383,26 @@ const effectiveThemeMode = computed<"light" | "dark">(() =>
   themeMode.value === "system" ? systemThemeMode.value : themeMode.value,
 );
 
+const canUndoTableChange = computed(() => undoStack.value.length > 0);
+const canRedoTableChange = computed(() => redoStack.value.length > 0);
+
 const appShellClasses = computed(() => [
   `theme-${effectiveThemeMode.value}`,
   { "top-panel-hidden": !isTopPanelVisible.value },
   { "platform-linux": isLinuxPlatform() },
+  { "table-select-mode": tableInteractionMode.value === "select" },
 ]);
 
 const displayedColumns = computed(() =>
   columnOrder.value
     .map((key) => columns.find((column) => column.key === key))
     .filter((column): column is (typeof columns)[number] => column !== undefined),
+);
+
+const selectableTableColumns = computed(() =>
+  displayedColumns.value
+    .filter((column) => column.key !== "row_number")
+    .map((column) => column.key as keyof EncodingRow),
 );
 
 const gridTemplateColumns = computed(() =>
@@ -448,7 +489,22 @@ const findReplaceMatches = computed<EncodingFindReplaceMatch[]>(() => {
 
   const matches: EncodingFindReplaceMatch[] = [];
   filteredRows.value.forEach(({ row, index }, filteredIndex) => {
+    const rowId = getRowIdentity(row);
+    if (
+      findReplaceScope.value === "selectedRows" &&
+      !selectedRowIds.value.has(rowId)
+    ) {
+      return;
+    }
+
     for (const columnKey of activeColumns) {
+      if (
+        findReplaceScope.value === "selectedCells" &&
+        !selectedTableCells.value.has(tableCellKey(index, columnKey))
+      ) {
+        continue;
+      }
+
       if (findReplaceCellMatches(row[columnKey], query)) {
         matches.push({ columnKey, filteredIndex, row, rowIndex: index });
       }
@@ -606,6 +662,14 @@ watch(
   },
 );
 
+watch(
+  () => [canUndoTableChange.value, canRedoTableChange.value],
+  () => {
+    syncHistoryMenuState();
+  },
+  { immediate: true },
+);
+
 watch(availableFindReplaceColumns, (availableColumns) => {
   const availableKeys = new Set(availableColumns.map((column) => column.key));
   const nextColumns = findReplaceColumns.value.filter((column) => availableKeys.has(column));
@@ -716,6 +780,20 @@ watch(renderedRows, () => {
   });
 });
 
+watch(
+  () => displayedColumns.value.map((column) => column.key).join("|"),
+  () => {
+    clearTableCellSelection();
+  },
+);
+
+watch(
+  () => filteredRows.value.map(({ index }) => index).join("|"),
+  () => {
+    clearTableCellSelection();
+  },
+);
+
 registerMenuListeners();
 void syncNativeChrome();
 if (isMacPlatform()) {
@@ -723,6 +801,9 @@ if (isMacPlatform()) {
 }
 window.addEventListener("keydown", handleGlobalShortcut);
 window.addEventListener("keydown", handleWindowsMenuShortcut);
+window.addEventListener("pointerdown", handleWindowPointerDownForTableKeyboard, true);
+window.addEventListener("mousemove", handleWindowTableCellDragMouseMove);
+window.addEventListener("mouseup", endTableCellDragSelection);
 systemThemeQuery.addEventListener("change", handleSystemThemeChange);
 
 onBeforeUnmount(() => {
@@ -749,22 +830,29 @@ onBeforeUnmount(() => {
   unlistenEncodingClearList?.();
   unlistenEncodingDeleteSelected?.();
   unlistenEncodingCopySelected?.();
+  unlistenEncodingUndoTableChange?.();
+  unlistenEncodingRedoTableChange?.();
   unlistenEncodingSelectAllFiltered?.();
   unlistenEncodingDeselectAllRows?.();
   unlistenEncodingBulkColumn?.();
   unlistenEncodingCodeShift?.();
   unlistenEncodingInsertRows?.();
   unlistenEncodingToggleTopPanel?.();
+  unlistenEncodingToggleTableMode?.();
   unlistenSetLanguage?.();
   unlistenOpenLanguageDialog?.();
   if (isMacPlatform()) {
     window.removeEventListener("focus", handleWindowFocus);
   }
   window.removeEventListener("keydown", handleGlobalShortcut);
+  window.removeEventListener("pointerdown", handleWindowPointerDownForTableKeyboard, true);
   rowResizeObservers.forEach((observer) => observer.disconnect());
   rowResizeObservers.clear();
-  rowElements.clear();
-  window.removeEventListener("keydown", handleWindowsMenuShortcut);
+rowElements.clear();
+window.removeEventListener("keydown", handleWindowsMenuShortcut);
+window.removeEventListener("mousemove", handleWindowTableCellDragMouseMove);
+window.removeEventListener("mouseup", endTableCellDragSelection);
+  stopTableCellDragAutoScroll();
   systemThemeQuery.removeEventListener("change", handleSystemThemeChange);
 });
 
@@ -781,6 +869,61 @@ function handleWindowFocus() {
 }
 
 function handleGlobalShortcut(event: KeyboardEvent) {
+  if (event.key === "Escape" && editableEventTarget(event.target)) {
+    event.preventDefault();
+    (event.target as HTMLElement).blur();
+    exitTableCellEdit();
+    return;
+  }
+
+  if (event.key === "Escape" && isSearchOverlayOpen.value) {
+    event.preventDefault();
+    closeSearchOverlay();
+    return;
+  }
+
+  if (
+    tableInteractionMode.value === "select" &&
+    editingTableCell.value &&
+    editableEventTarget(event.target)
+  ) {
+    return;
+  }
+
+  if (
+    event.key === "Escape" &&
+    tableInteractionMode.value === "select" &&
+    !hasOpenEncodingDialog() &&
+    (selectedTableCells.value.size > 0 || selectedRowIds.value.size > 0)
+  ) {
+    event.preventDefault();
+    deselectAllRows();
+    return;
+  }
+
+  if (
+    tableInteractionMode.value === "select" &&
+    !isSearchOverlayOpen.value &&
+    !hasOpenEncodingDialog() &&
+    !hasActiveEncodingDialogTask() &&
+    isTableSelectionKeyboardTarget(event) &&
+    handleTableSelectionKeydown(event)
+  ) {
+    return;
+  }
+
+  if (
+    (event.key === "t" || event.key === "T") &&
+    !event.ctrlKey &&
+    !event.metaKey &&
+    !event.altKey &&
+    !editableEventTarget(event.target)
+  ) {
+    event.preventDefault();
+    toggleTableInteractionMode();
+    return;
+  }
+
   if (shortcutMatches(event, "encoding_open_search_panel", isMacPlatform())) {
     event.preventDefault();
     if (hasOpenEncodingDialog()) return;
@@ -788,10 +931,6 @@ function handleGlobalShortcut(event: KeyboardEvent) {
     return;
   }
 
-  if (event.key === "Escape" && isSearchOverlayOpen.value) {
-    event.preventDefault();
-    closeSearchOverlay();
-  }
 }
 
 function openSearchOverlay() {
@@ -965,6 +1104,26 @@ function registerMenuListeners() {
       console.warn("Failed to register encoding copy selected menu listener.", error);
     });
 
+  listen("encoding-undo-table-change", () => {
+    undoTableChange();
+  })
+    .then((unlisten) => {
+      unlistenEncodingUndoTableChange = unlisten;
+    })
+    .catch((error) => {
+      console.warn("Failed to register encoding undo table change menu listener.", error);
+    });
+
+  listen("encoding-redo-table-change", () => {
+    redoTableChange();
+  })
+    .then((unlisten) => {
+      unlistenEncodingRedoTableChange = unlisten;
+    })
+    .catch((error) => {
+      console.warn("Failed to register encoding redo table change menu listener.", error);
+    });
+
   listen("encoding-select-all-filtered", () => {
     selectAllFilteredRows();
   })
@@ -1023,6 +1182,16 @@ function registerMenuListeners() {
     })
     .catch((error) => {
       console.warn("Failed to register encoding top panel menu listener.", error);
+    });
+
+  listen("encoding-toggle-table-mode", () => {
+    toggleTableInteractionMode();
+  })
+    .then((unlisten) => {
+      unlistenEncodingToggleTableMode = unlisten;
+    })
+    .catch((error) => {
+      console.warn("Failed to register encoding table mode menu listener.", error);
     });
 
   listen("encoding-export-excel", () => {
@@ -1114,7 +1283,72 @@ function toText(value: unknown) {
   return typeof value === "string" ? value : "";
 }
 
+function createTableSnapshot() {
+  const snapshot: EncodingTableSnapshot = {
+    jsonPath: jsonPath.value,
+    rows: rows.value,
+  };
+
+  return JSON.stringify(snapshot);
+}
+
+function restoreTableSnapshot(snapshot: string) {
+  const parsed = JSON.parse(snapshot) as EncodingTableSnapshot;
+  rows.value = parsed.rows.map(normalizeEncodingJsonRow);
+  jsonPath.value = toText(parsed.jsonPath);
+  selectedRowIds.value = new Set();
+  selectionAnchorRowId.value = null;
+  pendingDeleteIndex.value = null;
+  clearTableCellSelection();
+  resetVirtualRowState();
+}
+
+function pushHistorySnapshot(stack: string[], snapshot: string) {
+  if (stack[stack.length - 1] === snapshot) return stack;
+  return [...stack, snapshot].slice(-maxHistorySteps);
+}
+
+function recordHistoryStep(snapshot = createTableSnapshot()) {
+  if (snapshot === createTableSnapshot()) return;
+  undoStack.value = pushHistorySnapshot(undoStack.value, snapshot);
+  redoStack.value = [];
+  syncHistoryMenuState();
+}
+
+function recordCurrentStateForUndo() {
+  undoStack.value = pushHistorySnapshot(undoStack.value, createTableSnapshot());
+  redoStack.value = [];
+  syncHistoryMenuState();
+}
+
+function undoTableChange() {
+  if (!canUndoTableChange.value) return;
+
+  const currentSnapshot = createTableSnapshot();
+  const snapshot = undoStack.value[undoStack.value.length - 1];
+  undoStack.value = undoStack.value.slice(0, -1);
+  redoStack.value = pushHistorySnapshot(redoStack.value, currentSnapshot);
+  restoreTableSnapshot(snapshot);
+  syncHistoryMenuState();
+  statusMessage.value = t("message.undidTableChange");
+  errorMessage.value = "";
+}
+
+function redoTableChange() {
+  if (!canRedoTableChange.value) return;
+
+  const currentSnapshot = createTableSnapshot();
+  const snapshot = redoStack.value[redoStack.value.length - 1];
+  redoStack.value = redoStack.value.slice(0, -1);
+  undoStack.value = pushHistorySnapshot(undoStack.value, currentSnapshot);
+  restoreTableSnapshot(snapshot);
+  syncHistoryMenuState();
+  statusMessage.value = t("message.redidTableChange");
+  errorMessage.value = "";
+}
+
 function addRowAfter(rowIndex: number) {
+  recordCurrentStateForUndo();
   rows.value.splice(rowIndex + 1, 0, createEmptyRow());
   if (pendingDeleteIndex.value !== null && pendingDeleteIndex.value > rowIndex) {
     pendingDeleteIndex.value += 1;
@@ -1147,6 +1381,7 @@ function confirmInsertRows() {
     return;
   }
 
+  recordCurrentStateForUndo();
   const insertIndex = targetRow - 1;
   rows.value.splice(insertIndex, 0, ...Array.from({ length: count }, createEmptyRow));
   if (pendingDeleteIndex.value !== null && pendingDeleteIndex.value >= insertIndex) {
@@ -1154,6 +1389,63 @@ function confirmInsertRows() {
   }
   closeInsertRowsDialog();
   statusMessage.value = `${t("insertRows.inserted")}: ${count}.`;
+  errorMessage.value = "";
+}
+
+async function pasteClipboardAsTable() {
+  const target = activeTableCell.value ?? focusedPasteCell.value;
+  if (!target) {
+    statusMessage.value = t("message.noPasteTarget");
+    errorMessage.value = "";
+    return;
+  }
+
+  let text = "";
+  try {
+    if (!navigator.clipboard?.readText) throw new Error(t("message.clipboardReadUnavailable"));
+    text = await navigator.clipboard.readText();
+  } catch (error) {
+    errorMessage.value =
+      error instanceof Error ? error.message : t("message.clipboardReadUnavailable");
+    statusMessage.value = "";
+    return;
+  }
+
+  if (text === "") return;
+
+  const table = parseClipboardTable(text);
+
+  const pasteColumns = displayedColumns.value
+    .filter((column) => column.key !== "row_number")
+    .map((column) => column.key as keyof EncodingRow);
+  const startColumnIndex = pasteColumns.indexOf(target.columnKey);
+  if (startColumnIndex === -1) {
+    statusMessage.value = t("message.noPasteTarget");
+    errorMessage.value = "";
+    return;
+  }
+
+  recordCurrentStateForUndo();
+  const requiredRows = target.rowIndex + table.length - rows.value.length;
+  if (requiredRows > 0) {
+    rows.value.push(...Array.from({ length: requiredRows }, createEmptyRow));
+  }
+
+  let changedCount = 0;
+  table.forEach((pasteRow, pasteRowOffset) => {
+    const targetRow = rows.value[target.rowIndex + pasteRowOffset];
+    if (!targetRow) return;
+
+    pasteRow.forEach((value, pasteColumnOffset) => {
+      const targetColumn = pasteColumns[startColumnIndex + pasteColumnOffset];
+      if (!targetColumn) return;
+      targetRow[targetColumn] = targetColumn === "code" ? normalizeCode(value) : value;
+      changedCount += 1;
+    });
+  });
+
+  rows.value = [...rows.value];
+  statusMessage.value = `${t("message.pastedCells")}: ${changedCount}.`;
   errorMessage.value = "";
 }
 
@@ -1179,6 +1471,7 @@ async function loadJsonFromPath(path: string) {
     const parsed = JSON.parse(text) as unknown;
     const importedRows = normalizeEncodingJsonRows(parsed);
 
+    recordCurrentStateForUndo();
     rows.value = importedRows;
     jsonPath.value = path;
     selectedRowIds.value = new Set();
@@ -2285,6 +2578,7 @@ async function confirmImportText() {
     const bytes = await readFile(importPath.value.trim());
     const text = decodeImportText(bytes);
     const importedRows = parseEncodingTableText(text);
+    recordCurrentStateForUndo();
     rows.value = importAppendRows.value
       ? [...rows.value, ...importedRows]
       : importedRows;
@@ -2339,6 +2633,7 @@ async function confirmExcelImport() {
       throw new Error(t("message.noValidExcelRows"));
     }
 
+    recordCurrentStateForUndo();
     rows.value = excelImportAppendRows.value
       ? [...rows.value, ...importedRows]
       : importedRows;
@@ -2633,6 +2928,7 @@ function cancelDeleteRow() {
 }
 
 function confirmDeleteRow(rowIndex: number) {
+  recordCurrentStateForUndo();
   const row = rows.value[rowIndex];
   if (row) {
     selectedRowIds.value.delete(getRowIdentity(row));
@@ -2655,6 +2951,7 @@ async function clearRows() {
   );
 
   if (!confirmed) return;
+  recordCurrentStateForUndo();
   rows.value = [];
   selectedRowIds.value = new Set();
   selectionAnchorRowId.value = null;
@@ -2682,6 +2979,7 @@ async function deleteSelectedRows() {
 
   if (!confirmed) return;
 
+  recordCurrentStateForUndo();
   const idsToDelete = selectedRowIds.value;
   rows.value = rows.value.filter((row) => !idsToDelete.has(getRowIdentity(row)));
   selectedRowIds.value = new Set();
@@ -2739,6 +3037,534 @@ function openBulkColumnDialog() {
   bulkColumnValue.value = "";
 }
 
+function focusPasteCell(rowIndex: number, columnKey: keyof EncodingRow) {
+  focusedPasteCell.value = { columnKey, rowIndex };
+}
+
+function editableEventTarget(target: EventTarget | null) {
+  const element = target as HTMLElement | null;
+  return Boolean(element?.closest("input, textarea, select"));
+}
+
+function interactiveEventTarget(target: EventTarget | null) {
+  const element = target as HTMLElement | null;
+  return Boolean(element?.closest("button, input, textarea, select, [contenteditable='true']"));
+}
+
+function handleWindowPointerDownForTableKeyboard(event: PointerEvent) {
+  const wrapper = tableWrap.value;
+  const targetNode = event.target instanceof Node ? event.target : null;
+  if (!wrapper || !targetNode || !wrapper.contains(targetNode)) {
+    isTableKeyboardActive.value = false;
+  }
+}
+
+function focusTableKeyboardSurface() {
+  isTableKeyboardActive.value = true;
+  nextTick(() => {
+    if (!editingTableCell.value) {
+      tableWrap.value?.focus({ preventScroll: true });
+    }
+  });
+}
+
+function isTableSelectionKeyboardTarget(event: KeyboardEvent) {
+  const wrapper = tableWrap.value;
+  if (!wrapper || !isTableKeyboardActive.value || interactiveEventTarget(event.target)) {
+    return false;
+  }
+
+  const targetNode = event.target instanceof Node ? event.target : null;
+  const activeNode = document.activeElement;
+  return (
+    (targetNode !== null && wrapper.contains(targetNode)) ||
+    (activeNode !== null && wrapper.contains(activeNode))
+  );
+}
+
+function tableCellKey(rowIndex: number, columnKey: keyof EncodingRow) {
+  return `${rowIndex}:${columnKey}`;
+}
+
+function parseTableCellKey(key: string): EncodingTableCell | null {
+  const separatorIndex = key.indexOf(":");
+  if (separatorIndex === -1) return null;
+  const rowIndex = Number.parseInt(key.slice(0, separatorIndex), 10);
+  const columnKey = key.slice(separatorIndex + 1) as keyof EncodingRow;
+  if (!Number.isInteger(rowIndex) || !selectableTableColumns.value.includes(columnKey)) {
+    return null;
+  }
+  return { rowIndex, columnKey };
+}
+
+function visibleRowIndicesBetween(startRowIndex: number, endRowIndex: number) {
+  const visibleRows = filteredRows.value.map((item) => item.index);
+  const startVisibleIndex = visibleRows.indexOf(startRowIndex);
+  const endVisibleIndex = visibleRows.indexOf(endRowIndex);
+  if (startVisibleIndex === -1 || endVisibleIndex === -1) {
+    const minRowIndex = Math.min(startRowIndex, endRowIndex);
+    const maxRowIndex = Math.max(startRowIndex, endRowIndex);
+    return visibleRows.filter((rowIndex) => rowIndex >= minRowIndex && rowIndex <= maxRowIndex);
+  }
+
+  const from = Math.min(startVisibleIndex, endVisibleIndex);
+  const to = Math.max(startVisibleIndex, endVisibleIndex);
+  return visibleRows.slice(from, to + 1);
+}
+
+function tableCellRange(anchor: EncodingTableCell, cell: EncodingTableCell) {
+  const columns = selectableTableColumns.value;
+  const anchorColumnIndex = columns.indexOf(anchor.columnKey);
+  const cellColumnIndex = columns.indexOf(cell.columnKey);
+  if (anchorColumnIndex === -1 || cellColumnIndex === -1) return new Set<string>();
+
+  const fromColumn = Math.min(anchorColumnIndex, cellColumnIndex);
+  const toColumn = Math.max(anchorColumnIndex, cellColumnIndex);
+  const nextSelection = new Set<string>();
+  visibleRowIndicesBetween(anchor.rowIndex, cell.rowIndex).forEach((rowIndex) => {
+    columns.slice(fromColumn, toColumn + 1).forEach((columnKey) => {
+      nextSelection.add(tableCellKey(rowIndex, columnKey));
+    });
+  });
+  return nextSelection;
+}
+
+function selectTableCell(cell: EncodingTableCell, extendSelection = false) {
+  exitTableCellEdit();
+  focusTableKeyboardSurface();
+  activeTableCell.value = cell;
+  focusedPasteCell.value = cell;
+
+  if (extendSelection && tableCellSelectionAnchor.value) {
+    selectedTableCells.value = tableCellRange(tableCellSelectionAnchor.value, cell);
+    syncRowSelectionFromTableCells();
+    return;
+  }
+
+  tableCellSelectionAnchor.value = cell;
+  selectedTableCells.value = new Set([tableCellKey(cell.rowIndex, cell.columnKey)]);
+  syncRowSelectionFromTableCells();
+}
+
+function firstTableCellFromSelection(selection: Set<string>) {
+  for (const key of selection) {
+    const cell = parseTableCellKey(key);
+    if (cell) return cell;
+  }
+  return null;
+}
+
+function toggleTableCellInSelection(cell: EncodingTableCell) {
+  exitTableCellEdit();
+  const key = tableCellKey(cell.rowIndex, cell.columnKey);
+  const nextSelection = new Set(selectedTableCells.value);
+
+  if (nextSelection.has(key)) {
+    nextSelection.delete(key);
+    const fallbackCell = firstTableCellFromSelection(nextSelection);
+    activeTableCell.value = fallbackCell;
+    tableCellSelectionAnchor.value = fallbackCell;
+    focusedPasteCell.value = fallbackCell;
+  } else {
+    nextSelection.add(key);
+    activeTableCell.value = cell;
+    tableCellSelectionAnchor.value = cell;
+    focusedPasteCell.value = cell;
+  }
+
+  selectedTableCells.value = nextSelection;
+  syncRowSelectionFromTableCells();
+}
+
+function handleTableCellMouseDown(rowIndex: number, columnKey: keyof EncodingRow, event: MouseEvent) {
+  if (tableInteractionMode.value !== "select") return;
+  if (event.button !== 0) return;
+  const target = event.target as HTMLElement | null;
+  if (isTableCellEditing(rowIndex, columnKey) && target?.closest("textarea")) return;
+  event.preventDefault();
+  tableCellDragPointerX = event.clientX;
+  tableCellDragPointerY = event.clientY;
+
+  if (isDiscontiguousCellClickSelectionEnabled && (event.metaKey || event.ctrlKey) && !event.shiftKey) {
+    isDraggingTableCellSelection.value = false;
+    toggleTableCellInSelection({ rowIndex, columnKey });
+    return;
+  }
+
+  isDraggingTableCellSelection.value = true;
+  tableCellAutoScrollStartedAt = performance.now();
+  scheduleTableCellDragAutoScroll();
+  selectTableCell({ rowIndex, columnKey }, event.shiftKey);
+}
+
+function handleWindowTableCellDragMouseMove(event: MouseEvent) {
+  if (!isDraggingTableCellSelection.value) return;
+  tableCellDragPointerX = event.clientX;
+  tableCellDragPointerY = event.clientY;
+  scheduleTableCellDragAutoScroll();
+}
+
+function handleTableCellMouseMove(rowIndex: number, columnKey: keyof EncodingRow, event: MouseEvent) {
+  if (tableInteractionMode.value !== "select" || !isDraggingTableCellSelection.value) return;
+  if (!tableCellSelectionAnchor.value) return;
+  tableCellDragPointerX = event.clientX;
+  tableCellDragPointerY = event.clientY;
+  scheduleTableCellDragAutoScroll();
+  selectTableCell({ rowIndex, columnKey }, true);
+}
+
+function handleTableCellDoubleClick(rowIndex: number, columnKey: keyof EncodingRow, event: MouseEvent) {
+  if (tableInteractionMode.value !== "select") return;
+  event.preventDefault();
+  selectTableCell({ rowIndex, columnKey });
+  enterTableCellEdit({ rowIndex, columnKey });
+}
+
+function endTableCellDragSelection() {
+  isDraggingTableCellSelection.value = false;
+  tableCellAutoScrollStartedAt = 0;
+  stopTableCellDragAutoScroll();
+}
+
+function handleTableTextareaFocus(rowIndex: number, columnKey: keyof EncodingRow, event: FocusEvent) {
+  if (tableInteractionMode.value === "select") {
+    if (isTableCellEditing(rowIndex, columnKey)) {
+      focusPasteCell(rowIndex, columnKey);
+      return;
+    }
+    (event.target as HTMLTextAreaElement).blur();
+    selectTableCell({ rowIndex, columnKey });
+    return;
+  }
+
+  focusPasteCell(rowIndex, columnKey);
+}
+
+function handleTableTextareaBlur(row: EncodingRow, columnKey: keyof EncodingRow) {
+  const editedColumn = editingTableCell.value?.columnKey;
+  exitTableCellEdit(false);
+  if ((editedColumn ?? columnKey) === "code") {
+    normalizeEditedCode(row);
+  }
+}
+
+function isTableCellSelected(rowIndex: number, columnKey: keyof EncodingRow) {
+  return selectedTableCells.value.has(tableCellKey(rowIndex, columnKey));
+}
+
+function isActiveTableCell(rowIndex: number, columnKey: keyof EncodingRow) {
+  return activeTableCell.value?.rowIndex === rowIndex && activeTableCell.value.columnKey === columnKey;
+}
+
+function isTableCellEditing(rowIndex: number, columnKey: keyof EncodingRow) {
+  return editingTableCell.value?.rowIndex === rowIndex && editingTableCell.value.columnKey === columnKey;
+}
+
+function enterTableCellEdit(cell: EncodingTableCell) {
+  editingTableCell.value = cell;
+  activeTableCell.value = cell;
+  focusedPasteCell.value = cell;
+  nextTick(() => {
+    const selector = `.textarea-cell[data-cell-row-index="${cell.rowIndex}"][data-cell-column="${cell.columnKey}"] textarea`;
+    const textarea = tableWrap.value?.querySelector<HTMLTextAreaElement>(selector);
+    textarea?.focus();
+    textarea?.select();
+  });
+}
+
+function exitTableCellEdit(blurTextarea = true) {
+  const editingCell = editingTableCell.value;
+  if (blurTextarea && editingCell) {
+    const selector = `.textarea-cell[data-cell-row-index="${editingCell.rowIndex}"][data-cell-column="${editingCell.columnKey}"] textarea`;
+    const textarea = tableWrap.value?.querySelector<HTMLTextAreaElement>(selector);
+    if (textarea && document.activeElement === textarea) {
+      textarea.blur();
+    }
+  }
+  editingTableCell.value = null;
+}
+
+function toggleTableInteractionMode() {
+  const nextMode: TableInteractionMode = tableInteractionMode.value === "edit" ? "select" : "edit";
+  tableInteractionMode.value = nextMode;
+  (document.activeElement as HTMLElement | null)?.blur();
+  statusMessage.value =
+    nextMode === "select" ? t("message.tableSelectMode") : t("message.tableEditMode");
+  errorMessage.value = "";
+
+  if (nextMode === "edit") {
+    clearTableCellSelection();
+    return;
+  }
+
+  if (nextMode === "select" && !activeTableCell.value) {
+    const firstVisibleRow = filteredRows.value[0];
+    const firstColumn = selectableTableColumns.value[0];
+    if (firstVisibleRow && firstColumn) {
+      selectTableCell({ rowIndex: firstVisibleRow.index, columnKey: firstColumn });
+    }
+  }
+}
+
+function clearTableCellSelection() {
+  const hadTableCellSelection = selectedTableCells.value.size > 0;
+  selectedTableCells.value = new Set();
+  activeTableCell.value = null;
+  tableCellSelectionAnchor.value = null;
+  editingTableCell.value = null;
+  isDraggingTableCellSelection.value = false;
+  tableCellAutoScrollStartedAt = 0;
+  stopTableCellDragAutoScroll();
+  if (hadTableCellSelection) {
+    selectedRowIds.value = new Set();
+    selectionAnchorRowId.value = null;
+  }
+}
+
+function syncRowSelectionFromTableCells() {
+  const nextSelectedIds = new Set<number>();
+  selectedTableCellList().forEach((cell) => {
+    const row = rows.value[cell.rowIndex];
+    if (row) nextSelectedIds.add(getRowIdentity(row));
+  });
+  selectedRowIds.value = nextSelectedIds;
+  selectionAnchorRowId.value = nextSelectedIds.values().next().value ?? null;
+}
+
+function scheduleTableCellDragAutoScroll() {
+  if (tableCellAutoScrollFrame !== undefined) return;
+  tableCellAutoScrollFrame = window.requestAnimationFrame(runTableCellDragAutoScroll);
+}
+
+function stopTableCellDragAutoScroll() {
+  if (tableCellAutoScrollFrame !== undefined) {
+    window.cancelAnimationFrame(tableCellAutoScrollFrame);
+    tableCellAutoScrollFrame = undefined;
+  }
+}
+
+function runTableCellDragAutoScroll() {
+  tableCellAutoScrollFrame = undefined;
+  if (!isDraggingTableCellSelection.value || !tableWrap.value) return;
+
+  const bounds = tableWrap.value.getBoundingClientRect();
+  const edgeSize = 56;
+  const topDistance = tableCellDragPointerY - bounds.top;
+  const bottomDistance = bounds.bottom - tableCellDragPointerY;
+  let delta = 0;
+
+  if (topDistance < edgeSize) {
+    delta = -tableCellDragAutoScrollStep(topDistance, edgeSize);
+  } else if (bottomDistance < edgeSize) {
+    delta = tableCellDragAutoScrollStep(bottomDistance, edgeSize);
+  }
+
+  if (delta !== 0) {
+    tableWrap.value.scrollTop += delta;
+    updateTableViewport();
+    updateTableCellDragSelectionFromPointer();
+  }
+  scheduleTableCellDragAutoScroll();
+}
+
+function tableCellDragAutoScrollStep(edgeDistance: number, edgeSize: number) {
+  const closeness = (edgeSize - Math.max(0, Math.min(edgeDistance, edgeSize))) / edgeSize;
+  const distanceBoost = closeness * closeness;
+  const elapsedMs = Math.max(0, performance.now() - tableCellAutoScrollStartedAt);
+  const timeBoost = Math.min(3.2, 1 + elapsedMs / 650);
+  return Math.max(2, Math.ceil((5 + distanceBoost * 18) * timeBoost));
+}
+
+function updateTableCellDragSelectionFromPointer() {
+  if (!tableCellSelectionAnchor.value) return;
+  const element = document
+    .elementFromPoint(tableCellDragPointerX, tableCellDragPointerY)
+    ?.closest<HTMLElement>(".textarea-cell[data-cell-row-index][data-cell-column]");
+  if (!element) return;
+  const rowIndex = Number.parseInt(element.dataset.cellRowIndex ?? "", 10);
+  const columnKey = element.dataset.cellColumn as keyof EncodingRow | undefined;
+  if (!Number.isInteger(rowIndex) || !columnKey || !selectableTableColumns.value.includes(columnKey)) {
+    return;
+  }
+  selectTableCell({ rowIndex, columnKey }, true);
+}
+
+function selectedTableCellList() {
+  return [...selectedTableCells.value]
+    .map(parseTableCellKey)
+    .filter((cell): cell is EncodingTableCell => cell !== null && rows.value[cell.rowIndex] !== undefined);
+}
+
+async function copySelectedTableCells() {
+  const cells = selectedTableCellList();
+  if (cells.length === 0) return;
+
+  const rowIndices = [...new Set(cells.map((cell) => cell.rowIndex))].sort((a, b) => a - b);
+  const columns = selectableTableColumns.value;
+  const selectedColumnIndexes = cells
+    .map((cell) => columns.indexOf(cell.columnKey))
+    .filter((index) => index >= 0);
+  const fromColumn = Math.min(...selectedColumnIndexes);
+  const toColumn = Math.max(...selectedColumnIndexes);
+  const selectedKeys = selectedTableCells.value;
+
+  const text = rowIndices
+    .map((rowIndex) =>
+      columns
+        .slice(fromColumn, toColumn + 1)
+        .map((columnKey) =>
+          selectedKeys.has(tableCellKey(rowIndex, columnKey))
+            ? spreadsheetCellText(rows.value[rowIndex]?.[columnKey] ?? "")
+            : "",
+        )
+        .join("\t"),
+    )
+    .join("\n");
+
+  try {
+    await copyText(text);
+    statusMessage.value = `${t("message.copiedSelectedRows")}: ${cells.length}.`;
+    errorMessage.value = "";
+  } catch (error) {
+    errorMessage.value =
+      error instanceof Error ? error.message : t("message.failedCopySelectedRows");
+    statusMessage.value = "";
+  }
+}
+
+function clearSelectedTableCells() {
+  const cells = selectedTableCellList();
+  if (cells.length === 0) return;
+
+  const changedCells = cells.filter((cell) => rows.value[cell.rowIndex][cell.columnKey] !== "");
+  if (changedCells.length === 0) return;
+
+  recordCurrentStateForUndo();
+  changedCells.forEach((cell) => {
+    rows.value[cell.rowIndex][cell.columnKey] = "";
+  });
+  rows.value = [...rows.value];
+}
+
+function moveActiveTableCell(rowDelta: number, columnDelta: number, extendSelection: boolean) {
+  const visibleRows = filteredRows.value.map((item) => item.index);
+  const columns = selectableTableColumns.value;
+  if (visibleRows.length === 0 || columns.length === 0) return;
+
+  const currentCell = activeTableCell.value ?? {
+    rowIndex: visibleRows[0],
+    columnKey: columns[0],
+  };
+  const currentVisibleRowIndex = Math.max(0, visibleRows.indexOf(currentCell.rowIndex));
+  const currentColumnIndex = Math.max(0, columns.indexOf(currentCell.columnKey));
+  const nextVisibleRowIndex = Math.min(
+    visibleRows.length - 1,
+    Math.max(0, currentVisibleRowIndex + rowDelta),
+  );
+  const nextColumnIndex = Math.min(columns.length - 1, Math.max(0, currentColumnIndex + columnDelta));
+
+  selectTableCell(
+    { rowIndex: visibleRows[nextVisibleRowIndex], columnKey: columns[nextColumnIndex] },
+    extendSelection,
+  );
+  scrollTableCellRowIntoView(visibleRows[nextVisibleRowIndex]);
+}
+
+function scrollTableCellRowIntoView(rowIndex: number) {
+  const wrapper = tableWrap.value;
+  if (!wrapper) return;
+
+  const filteredIndex = filteredRows.value.findIndex((item) => item.index === rowIndex);
+  if (filteredIndex < 0) return;
+
+  const headerHeight = wrapper.querySelector<HTMLElement>(".header-row")?.offsetHeight ?? 0;
+  const rowTop = sumRowHeights(filteredRows.value, 0, filteredIndex);
+  const rowBottom = rowTop + rowHeight(filteredRows.value[filteredIndex].row);
+  const visibleTop = wrapper.scrollTop;
+  const visibleBottom = wrapper.scrollTop + wrapper.clientHeight - headerHeight;
+
+  if (rowTop < visibleTop) {
+    wrapper.scrollTop = rowTop;
+  } else if (rowBottom > visibleBottom) {
+    wrapper.scrollTop = Math.max(0, rowBottom - wrapper.clientHeight + headerHeight);
+  }
+  updateTableViewport();
+}
+
+function selectAllVisibleTableCells() {
+  exitTableCellEdit();
+  const columns = selectableTableColumns.value;
+  const nextSelection = new Set<string>();
+  filteredRows.value.forEach(({ index }) => {
+    columns.forEach((columnKey) => nextSelection.add(tableCellKey(index, columnKey)));
+  });
+  selectedTableCells.value = nextSelection;
+  syncRowSelectionFromTableCells();
+  const firstRow = filteredRows.value[0];
+  const firstColumn = columns[0];
+  if (firstRow && firstColumn) {
+    activeTableCell.value = { rowIndex: firstRow.index, columnKey: firstColumn };
+    tableCellSelectionAnchor.value = activeTableCell.value;
+    focusedPasteCell.value = activeTableCell.value;
+  }
+}
+
+function handleTableSelectionKeydown(event: KeyboardEvent) {
+  const key = event.key;
+  const commandKey = isMacPlatform() ? event.metaKey : event.ctrlKey;
+
+  if (commandKey && key.toLowerCase() === "a") {
+    event.preventDefault();
+    selectAllVisibleTableCells();
+    return true;
+  }
+
+  if (commandKey && key.toLowerCase() === "c") {
+    event.preventDefault();
+    void copySelectedTableCells();
+    return true;
+  }
+
+  if (commandKey && key.toLowerCase() === "v") {
+    event.preventDefault();
+    void pasteClipboardAsTable();
+    return true;
+  }
+
+  if (
+    (key === "Backspace" || key === "Delete") &&
+    !event.ctrlKey &&
+    !event.metaKey &&
+    !event.altKey &&
+    !event.shiftKey
+  ) {
+    event.preventDefault();
+    clearSelectedTableCells();
+    return true;
+  }
+
+  if (key === "Enter" && activeTableCell.value) {
+    event.preventDefault();
+    enterTableCellEdit(activeTableCell.value);
+    return true;
+  }
+
+  const movementByKey: Record<string, [number, number]> = {
+    ArrowUp: [-1, 0],
+    ArrowDown: [1, 0],
+    ArrowLeft: [0, -1],
+    ArrowRight: [0, 1],
+  };
+  const movement = movementByKey[key];
+  if (movement) {
+    event.preventDefault();
+    moveActiveTableCell(movement[0], movement[1], event.shiftKey);
+    return true;
+  }
+
+  return false;
+}
+
 function closeBulkColumnDialog() {
   isBulkColumnDialogOpen.value = false;
 }
@@ -2785,6 +3611,7 @@ async function confirmCodeShift() {
   );
   if (!confirmed) return;
 
+  const historySnapshot = createTableSnapshot();
   let changedCount = 0;
   let skippedCount = 0;
   rows.value.forEach((row) => {
@@ -2809,6 +3636,9 @@ async function confirmCodeShift() {
     changedCount += 1;
   });
 
+  if (changedCount > 0) {
+    recordHistoryStep(historySnapshot);
+  }
   rows.value = [...rows.value];
   pruneSelectedRows(true);
   closeCodeShiftDialog();
@@ -2871,12 +3701,16 @@ async function confirmBulkColumnChange() {
 
   if (!confirmed) return;
 
+  const historySnapshot = createTableSnapshot();
   let changedCount = 0;
   rows.value.forEach((row) => {
     if (!selectedIds.has(getRowIdentity(row))) return;
     changedCount += 1;
     row[columnKey] = columnKey === "code" ? normalizeCode(bulkColumnValue.value) : bulkColumnValue.value;
   });
+  if (changedCount > 0) {
+    recordHistoryStep(historySnapshot);
+  }
   rows.value = [...rows.value];
   pruneSelectedRows(true);
   closeBulkColumnDialog();
@@ -2941,6 +3775,12 @@ function selectAllFilteredRows() {
 }
 
 function deselectAllRows() {
+  if (selectedTableCells.value.size > 0) {
+    clearTableCellSelection();
+    statusMessage.value = t("message.deselectedAllRows");
+    errorMessage.value = "";
+    return;
+  }
   selectedRowIds.value = new Set();
   selectionAnchorRowId.value = null;
   statusMessage.value = t("message.deselectedAllRows");
@@ -3183,6 +4023,7 @@ function replaceCurrentFindReplaceMatch() {
   const nextValue = replacementForFindCell(currentValue, match.columnKey);
   if (nextValue === currentValue) return;
 
+  recordCurrentStateForUndo();
   match.row[match.columnKey] = nextValue;
   statusMessage.value = `${t("find.replacedCells")}: 1.`;
   errorMessage.value = "";
@@ -3201,6 +4042,7 @@ async function replaceAllFindReplaceMatches() {
     uniqueCells.set(`${getRowIdentity(match.row)}:${match.columnKey}`, match);
   }
 
+  const historySnapshot = createTableSnapshot();
   let changedCount = 0;
   for (const match of uniqueCells.values()) {
     const currentValue = match.row[match.columnKey];
@@ -3210,6 +4052,9 @@ async function replaceAllFindReplaceMatches() {
     changedCount += 1;
   }
 
+  if (changedCount > 0) {
+    recordHistoryStep(historySnapshot);
+  }
   currentFindMatchIndex.value = 0;
   statusMessage.value = `${t("find.replacedCells")}: ${changedCount}.`;
   errorMessage.value = "";
@@ -3802,6 +4647,10 @@ function finishColumnReorder(event: PointerEvent) {
   const sourceKey = draggedColumnKey;
   const targetKey = columnKeyFromPoint(lastColumnPointerX, lastColumnPointerY);
   cancelColumnReorder();
+  if (!sourceKey) {
+    if (targetKey) selectVisibleTableColumn(targetKey, event.shiftKey);
+    return;
+  }
   if (!sourceKey || !targetKey || sourceKey === targetKey || !movableColumn(targetKey)) return;
 
   const nextOrder = columnOrder.value.filter((key) => key !== sourceKey);
@@ -3810,6 +4659,47 @@ function finishColumnReorder(event: PointerEvent) {
   nextOrder.splice(targetIndex, 0, sourceKey);
   columnOrder.value = nextOrder;
   persistColumnOrder();
+}
+
+function selectVisibleTableColumn(columnKey: EncodingColumnKey, extendSelection = false) {
+  if (tableInteractionMode.value !== "select") return;
+  if (columnKey === "row_number") return;
+
+  const selectableColumn = columnKey as keyof EncodingRow;
+  if (!selectableTableColumns.value.includes(selectableColumn)) return;
+
+  exitTableCellEdit();
+  const columns = selectableTableColumns.value;
+  const anchorColumn = tableCellSelectionAnchor.value?.columnKey;
+  const anchorColumnIndex = anchorColumn ? columns.indexOf(anchorColumn) : -1;
+  const targetColumnIndex = columns.indexOf(selectableColumn);
+  const selectedColumns =
+    extendSelection && anchorColumnIndex >= 0
+      ? columns.slice(
+          Math.min(anchorColumnIndex, targetColumnIndex),
+          Math.max(anchorColumnIndex, targetColumnIndex) + 1,
+        )
+      : [selectableColumn];
+  const nextSelection = new Set<string>();
+  filteredRows.value.forEach(({ index }) => {
+    selectedColumns.forEach((selectedColumn) => {
+      nextSelection.add(tableCellKey(index, selectedColumn));
+    });
+  });
+  selectedTableCells.value = nextSelection;
+
+  const firstRow = filteredRows.value[0];
+  if (firstRow) {
+    activeTableCell.value = { rowIndex: firstRow.index, columnKey: selectableColumn };
+    tableCellSelectionAnchor.value = activeTableCell.value;
+    focusedPasteCell.value = activeTableCell.value;
+  } else {
+    activeTableCell.value = null;
+    tableCellSelectionAnchor.value = null;
+    focusedPasteCell.value = null;
+  }
+
+  syncRowSelectionFromTableCells();
 }
 
 function cellStyle(columnIndex: number, fallbackColumn?: "character" | "note") {
@@ -3885,6 +4775,16 @@ function syncAppLanguageMenu(forceRebuild = false) {
 async function syncNativeChrome() {
   await syncWindowTheme();
   syncAppLanguageMenu(true);
+}
+
+function syncHistoryMenuState() {
+  invoke("set_history_menu_enabled", {
+    canUndo: canUndoTableChange.value,
+    canRedo: canRedoTableChange.value,
+    target: "encoding",
+  }).catch((error) => {
+    console.warn("Failed to sync encoding history menu state.", error);
+  });
 }
 
 function refreshDefaultCheckMessages() {
@@ -4082,6 +4982,7 @@ function refreshDefaultCheckMessages() {
       v-model:selected-columns="findReplaceColumns"
       v-model:match-mode="findReplaceMatchMode"
       v-model:case-sensitive="isFindReplaceCaseSensitive"
+      v-model:scope="findReplaceScope"
       :columns="availableFindReplaceColumns"
       :current-match-index="currentFindMatchIndex"
       :match-count="findReplaceMatches.length"
@@ -4096,6 +4997,7 @@ function refreshDefaultCheckMessages() {
       ref="tableWrap"
       class="encoding-table-wrap"
       :aria-label="t('encoding.encodingList')"
+      tabindex="0"
       @scroll="handleTableScroll"
     >
       <div class="encoding-grid header-row" :style="{ gridTemplateColumns }">
@@ -4240,17 +5142,33 @@ function refreshDefaultCheckMessages() {
             <div
               v-else
               class="textarea-cell"
-              :class="{ 'find-current-cell': isCurrentFindReplaceCell(row, column.key) }"
+              :class="{
+                'find-current-cell': isCurrentFindReplaceCell(row, column.key),
+                'table-cell-selected': isTableCellSelected(rowIndex, column.key),
+                'table-cell-active': isActiveTableCell(rowIndex, column.key),
+                'table-cell-editing': isTableCellEditing(rowIndex, column.key),
+              }"
               :data-cell-column="column.key"
+              :data-cell-row-index="rowIndex"
               :style="encodingCellStyle(column.key)"
+              @mousedown="handleTableCellMouseDown(rowIndex, column.key, $event)"
+              @mousemove="handleTableCellMouseMove(rowIndex, column.key, $event)"
+              @dblclick="handleTableCellDoubleClick(rowIndex, column.key, $event)"
             >
               <textarea
                 v-model="row[column.key]"
                 :aria-label="column.label"
                 :autocapitalize="disablesTextCorrection(column.key) ? 'off' : undefined"
                 :autocorrect="disablesTextCorrection(column.key) ? 'off' : undefined"
+                :readonly="tableInteractionMode === 'select' && !isTableCellEditing(rowIndex, column.key)"
                 :spellcheck="disablesTextCorrection(column.key) ? false : undefined"
-                @blur="column.key === 'code' ? normalizeEditedCode(row) : undefined"
+                :tabindex="
+                  tableInteractionMode === 'select' && !isTableCellEditing(rowIndex, column.key)
+                    ? -1
+                    : 0
+                "
+                @focus="handleTableTextareaFocus(rowIndex, column.key, $event)"
+                @blur="handleTableTextareaBlur(row, column.key)"
               />
               <div class="textarea-measure">{{ row[column.key] || " " }}</div>
             </div>
@@ -5063,6 +5981,10 @@ button {
   background: var(--panel-bg);
 }
 
+.encoding-table-wrap:focus {
+  outline: none;
+}
+
 .encoding-grid {
   display: grid;
   min-width: max-content;
@@ -5246,6 +6168,43 @@ button {
   background: var(--warning-bg);
 }
 
+.textarea-cell.table-cell-selected {
+  background: color-mix(in srgb, var(--primary) 18%, var(--panel-bg));
+}
+
+.textarea-cell.table-cell-active {
+  outline: 2px solid var(--primary);
+  outline-offset: -2px;
+}
+
+.textarea-cell.table-cell-editing {
+  outline: 2px solid var(--success);
+  outline-offset: -2px;
+  background: color-mix(in srgb, var(--success) 14%, var(--panel-bg));
+}
+
+.table-select-mode .textarea-cell {
+  cursor: cell;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.table-select-mode .textarea-cell > textarea {
+  cursor: cell;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.table-select-mode .textarea-cell.table-cell-editing > textarea {
+  cursor: text;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.table-select-mode .textarea-cell.table-cell-editing > textarea:focus {
+  box-shadow: inset 0 0 0 2px var(--success);
+}
+
 .row-number-cell {
   display: grid;
   grid-template-columns: auto auto 1fr;
@@ -5339,6 +6298,10 @@ button {
   z-index: 3;
   outline: none;
   box-shadow: inset 0 0 0 2px var(--primary);
+}
+
+.table-select-mode .textarea-cell.table-cell-editing > textarea:focus {
+  box-shadow: inset 0 0 0 2px var(--success);
 }
 
 .textarea-measure {
