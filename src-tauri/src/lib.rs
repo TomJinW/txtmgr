@@ -700,10 +700,15 @@ fn set_main_column_visibility_menu(
         .and_then(|window| window.is_focused().ok())
         .unwrap_or(false);
 
-    let (language, column_visibility) = {
+    let (language, column_visibility, should_rebuild) = {
         let mut state = menu_state
             .lock()
             .map_err(|_| "Failed to lock native menu state.".to_string())?;
+        let should_rebuild = state
+            .main_column_visibility
+            .as_ref()
+            .map(|previous| previous != &normalized_visibility)
+            .unwrap_or(true);
         state.main_column_visibility = Some(normalized_visibility);
         (
             state
@@ -711,8 +716,13 @@ fn set_main_column_visibility_menu(
                 .clone()
                 .unwrap_or_else(|| "en".to_string()),
             state.main_column_visibility.clone(),
+            should_rebuild,
         )
     };
+
+    if !should_rebuild {
+        return Ok(());
+    }
 
     #[cfg(target_os = "macos")]
     {
