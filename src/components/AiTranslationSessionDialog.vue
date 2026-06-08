@@ -47,6 +47,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   applySelected: [];
+  applySelectedToAiOutput: [];
   close: [];
   discard: [];
   selectAll: [];
@@ -194,6 +195,13 @@ function newlineHintParts(value: string) {
           @click="emit('applySelected')"
         >
           {{ t("ai.applySelected") }} {{ selectedTaskIds.length > 0 ? selectedTaskIds.length : "" }}
+        </button>
+        <button
+          type="button"
+          :disabled="selectedTaskIds.length === 0"
+          @click="emit('applySelectedToAiOutput')"
+        >
+          {{ t("ai.applySelectedToAiOutput") }} {{ selectedTaskIds.length > 0 ? selectedTaskIds.length : "" }}
         </button>
         <button class="danger-btn" type="button" @click="emit('discard')">
           {{ t("ai.discardResult") }}

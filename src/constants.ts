@@ -14,13 +14,16 @@ export const draftStorageKey = "txtmgr.currentDraft.v1";
 // UI preferences stay in localStorage because they are browser-window scoped
 // settings, not user document data.
 export const columnFontSizeStorageKey = "txtmgr.columnFontSizes.v1";
+export const columnOrderStorageKey = "txtmgr.columnOrder.v1";
+export const columnVisibilityStorageKey = "txtmgr.columnVisibility.v1";
 export const columnWidthStorageKey = "txtmgr.columnWidths.v1";
 export const cjkFallbackStorageKey = "txtmgr.cjkFallback.v1";
+export const topPanelVisibleStorageKey = "txtmgr.topPanelVisible.v1";
 export const themeStorageKey = "txtmgr.theme.v1";
 export const maxHistorySteps = 2;
-export const defaultColumnFontSizes = [10, 14, 14, 14, 14, 14, 14];
-export const defaultColumnWidths = [138, 180, 280, 280, 220, 140, 180];
-export const minColumnWidths = [128, 90, 90, 90, 90, 90, 90];
+export const defaultColumnFontSizes = [10, 14, 14, 14, 14, 14, 14, 14];
+export const defaultColumnWidths = [138, 180, 280, 280, 220, 140, 180, 220];
+export const minColumnWidths = [128, 90, 90, 90, 90, 90, 90, 90];
 export const estimatedRowHeight = 72;
 export const virtualOverscanRows = 12;
 
@@ -65,6 +68,7 @@ export const excelDataColumnKeys: (keyof SentenceRow)[] = [
   "note",
   "state",
   "file_name",
+  "ai_output",
 ];
 
 export const columns = [
@@ -75,6 +79,7 @@ export const columns = [
   { key: "note", label: "note" },
   { key: "state", label: "state" },
   { key: "file_name", label: "file_name" },
+  { key: "ai_output", label: "ai_output" },
 ] as const;
 
 export const textSearchColumns: { key: TextSearchKey; label: string }[] = [
@@ -83,4 +88,5 @@ export const textSearchColumns: { key: TextSearchKey; label: string }[] = [
   { key: "translated_text", label: "translated_text" },
   { key: "note", label: "note" },
   { key: "file_name", label: "file_name" },
+  { key: "ai_output", label: "ai_output" },
 ];

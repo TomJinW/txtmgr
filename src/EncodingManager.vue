@@ -21,7 +21,7 @@ import {
   t,
   type AppLanguage,
 } from "./i18n";
-import { windowsShortcutMatches, type ShortcutAction } from "./shortcuts";
+import { shortcutMatches, windowsShortcutMatches, type ShortcutAction } from "./shortcuts";
 import {
   buildEncodingXlsxWorkbook,
   ensureXlsxExtension,
@@ -41,6 +41,7 @@ import EncodingExcelImportDialog from "./components/EncodingExcelImportDialog.vu
 import EncodingExcelExportDialog from "./components/EncodingExcelExportDialog.vue";
 import EncodingExportDialog from "./components/EncodingExportDialog.vue";
 import EncodingImportDialog from "./components/EncodingImportDialog.vue";
+import EncodingSearchControls from "./components/EncodingSearchControls.vue";
 import GoToRowDialog from "./components/GoToRowDialog.vue";
 import LanguageDialog from "./components/LanguageDialog.vue";
 import type { CjkFallbackMode, EncodingRow, SentenceRow, StoredDraft, ThemeMode } from "./types";
@@ -82,7 +83,9 @@ type SentenceCoverageSource = {
 const draftStorageKey = "txtmgr.encodingRows.v1";
 const columnWidthStorageKey = "txtmgr.encodingColumnWidths.v3";
 const columnFontSizeStorageKey = "txtmgr.encodingColumnFontSizes.v1";
+const columnOrderStorageKey = "txtmgr.encodingColumnOrder.v1";
 const fallbackStorageKey = "txtmgr.encodingFallback.v2";
+const topPanelVisibleStorageKey = "txtmgr.encodingTopPanelVisible.v1";
 const themeStorageKey = "txtmgr.theme.v1";
 const defaultColumnWidths = [112, 105, 112, 76, 200];
 const defaultColumnFontSizes = [10, 14, 14, 14, 14];
@@ -108,6 +111,7 @@ const columns = [
   { key: "width", label: "width" },
   { key: "note", label: "note" },
 ] as const;
+type EncodingColumnKey = (typeof columns)[number]["key"];
 const searchableColumns: (keyof EncodingRow)[] = [
   "original_char",
   "code",
@@ -119,8 +123,10 @@ const rows = ref<EncodingRow[]>([]);
 const jsonPath = ref("");
 const columnWidths = ref(restoreColumnWidths());
 const columnFontSizes = ref(restoreColumnFontSizes());
+const columnOrder = ref<EncodingColumnKey[]>(restoreColumnOrder());
 const fallbackPrefs = ref(restoreFallbackPrefs());
 const themeMode = ref<ThemeMode>(restoreThemeMode());
+const isTopPanelVisible = ref(restoreTopPanelVisible());
 const searchText = ref("");
 const isCaseSensitiveSearch = ref(false);
 const selectedSearchColumns = ref<(keyof EncodingRow)[]>([...searchableColumns]);
@@ -135,6 +141,7 @@ const isUnmappedCharactersDialogOpen = ref(false);
 const isUnusedEncodingsDialogOpen = ref(false);
 const isLineLengthDialogOpen = ref(false);
 const isLanguageDialogOpen = ref(false);
+const isSearchOverlayOpen = ref(false);
 const isImportDialogOpen = ref(false);
 const isImportingText = ref(false);
 const isSavingJson = ref(false);
@@ -227,6 +234,8 @@ const statusMessage = ref("");
 const errorMessage = ref("");
 const messageTimestamp = ref(formatMessageTimestamp());
 const tableWrap = ref<HTMLElement | null>(null);
+const topSearchControls = ref<InstanceType<typeof EncodingSearchControls> | null>(null);
+const overlaySearchControls = ref<InstanceType<typeof EncodingSearchControls> | null>(null);
 const tableScrollTop = ref(0);
 const tableViewportHeight = ref(600);
 const rowHeights = ref<Record<number, number>>({});
@@ -246,6 +255,7 @@ let unlistenEncodingOpenLineLength: UnlistenFn | undefined;
 let unlistenEncodingOpenGoToRow: UnlistenFn | undefined;
 let unlistenEncodingClearList: UnlistenFn | undefined;
 let unlistenEncodingDeleteSelected: UnlistenFn | undefined;
+let unlistenEncodingToggleTopPanel: UnlistenFn | undefined;
 let unlistenSetLanguage: UnlistenFn | undefined;
 let unlistenOpenLanguageDialog: UnlistenFn | undefined;
 const rowResizeObservers = new Map<number, ResizeObserver>();
@@ -260,6 +270,12 @@ const systemThemeMode = ref<"light" | "dark">(getSystemThemeMode());
 const tableEndSpacerWidth = 24;
 let filterCountRefreshFrame: number | undefined;
 let filterCountRefreshRun = 0;
+let columnDragTimer: number | undefined;
+let draggedColumnKey: EncodingColumnKey | null = null;
+let activeColumnDragElement: HTMLElement | null = null;
+let lastColumnPointerX = 0;
+let lastColumnPointerY = 0;
+const columnDropTargetKey = ref<EncodingColumnKey | null>(null);
 
 const effectiveThemeMode = computed<"light" | "dark">(() =>
   themeMode.value === "system" ? systemThemeMode.value : themeMode.value,
@@ -267,12 +283,21 @@ const effectiveThemeMode = computed<"light" | "dark">(() =>
 
 const appShellClasses = computed(() => [
   `theme-${effectiveThemeMode.value}`,
+  { "top-panel-hidden": !isTopPanelVisible.value },
   { "platform-linux": isLinuxPlatform() },
 ]);
 
+const displayedColumns = computed(() =>
+  columnOrder.value
+    .map((key) => columns.find((column) => column.key === key))
+    .filter((column): column is (typeof columns)[number] => column !== undefined),
+);
+
 const gridTemplateColumns = computed(() =>
   [
-    ...columnWidths.value.map((width) => `${width}px`),
+    ...displayedColumns.value.map(
+      (column) => `${columnWidths.value[columnIndexByKey(column.key)]}px`,
+    ),
     `${tableEndSpacerWidth}px`,
   ].join(" "),
 );
@@ -493,6 +518,13 @@ watch(themeMode, () => {
   void syncNativeChrome();
 });
 
+watch(isTopPanelVisible, () => {
+  window.localStorage.setItem(topPanelVisibleStorageKey, String(isTopPanelVisible.value));
+  nextTick(() => {
+    updateTableViewport();
+  });
+});
+
 watch(currentLanguage, () => {
   refreshDefaultCheckMessages();
   syncAppLanguageMenu();
@@ -543,10 +575,12 @@ void syncNativeChrome();
 if (isMacPlatform()) {
   window.addEventListener("focus", handleWindowFocus);
 }
+window.addEventListener("keydown", handleGlobalShortcut);
 window.addEventListener("keydown", handleWindowsMenuShortcut);
 systemThemeQuery.addEventListener("change", handleSystemThemeChange);
 
 onBeforeUnmount(() => {
+  cancelColumnReorder();
   window.clearTimeout(autoSaveTimer);
   window.clearTimeout(columnWidthSaveTimer);
   if (filterCountRefreshFrame !== undefined) {
@@ -565,11 +599,13 @@ onBeforeUnmount(() => {
   unlistenEncodingOpenGoToRow?.();
   unlistenEncodingClearList?.();
   unlistenEncodingDeleteSelected?.();
+  unlistenEncodingToggleTopPanel?.();
   unlistenSetLanguage?.();
   unlistenOpenLanguageDialog?.();
   if (isMacPlatform()) {
     window.removeEventListener("focus", handleWindowFocus);
   }
+  window.removeEventListener("keydown", handleGlobalShortcut);
   rowResizeObservers.forEach((observer) => observer.disconnect());
   rowResizeObservers.clear();
   rowElements.clear();
@@ -589,6 +625,31 @@ function handleWindowFocus() {
   syncAppLanguageMenu();
 }
 
+function handleGlobalShortcut(event: KeyboardEvent) {
+  if (shortcutMatches(event, "encoding_open_search_panel", isMacPlatform())) {
+    event.preventDefault();
+    if (hasOpenEncodingDialog()) return;
+    openSearchOverlay();
+    return;
+  }
+
+  if (event.key === "Escape" && isSearchOverlayOpen.value) {
+    event.preventDefault();
+    closeSearchOverlay();
+  }
+}
+
+function openSearchOverlay() {
+  isSearchOverlayOpen.value = true;
+  nextTick(() => {
+    overlaySearchControls.value?.focusSearchInput();
+  });
+}
+
+function closeSearchOverlay() {
+  isSearchOverlayOpen.value = false;
+}
+
 function handleWindowsMenuShortcut(event: KeyboardEvent) {
   if (!isWindowsPlatform()) return;
 
@@ -603,6 +664,7 @@ function handleWindowsMenuShortcut(event: KeyboardEvent) {
     { action: "encoding_go_to_row", run: () => openGoToRowDialog() },
     { action: "encoding_clear_list", run: () => void clearRows() },
     { action: "encoding_delete_selected", run: () => void deleteSelectedRows() },
+    { action: "encoding_toggle_top_panel", run: () => toggleTopPanel() },
     { action: "encoding_unmapped_characters", run: () => void openUnmappedCharactersDialog() },
     { action: "encoding_unused_encodings", run: () => void openUnusedEncodingsDialog() },
     { action: "encoding_line_length", run: () => void openLineLengthDialog() },
@@ -707,6 +769,16 @@ function registerMenuListeners() {
     })
     .catch((error) => {
       console.warn("Failed to register encoding delete selected menu listener.", error);
+    });
+
+  listen("encoding-toggle-top-panel", () => {
+    toggleTopPanel();
+  })
+    .then((unlisten) => {
+      unlistenEncodingToggleTopPanel = unlisten;
+    })
+    .catch((error) => {
+      console.warn("Failed to register encoding top panel menu listener.", error);
     });
 
   listen("encoding-export-excel", () => {
@@ -962,6 +1034,7 @@ function openEncodingDialog(dialog: EncodingDialog) {
     return false;
   }
 
+  closeSearchOverlay();
   closeEncodingDialogs();
   if (
     dialog === "excelExport" ||
@@ -1016,6 +1089,20 @@ function closeEncodingDialogs() {
   isLineLengthDialogOpen.value = false;
   isUnmappedCharactersDialogOpen.value = false;
   isUnusedEncodingsDialogOpen.value = false;
+}
+
+function hasOpenEncodingDialog() {
+  return (
+    isExcelExportDialogOpen.value ||
+    isExcelImportDialogOpen.value ||
+    isExportDialogOpen.value ||
+    isGoToRowDialogOpen.value ||
+    isImportDialogOpen.value ||
+    isLanguageDialogOpen.value ||
+    isLineLengthDialogOpen.value ||
+    isUnmappedCharactersDialogOpen.value ||
+    isUnusedEncodingsDialogOpen.value
+  );
 }
 
 function hasActiveEncodingDialogTask() {
@@ -2571,6 +2658,14 @@ function restoreThemeMode(): ThemeMode {
     : "system";
 }
 
+function restoreTopPanelVisible() {
+  return window.localStorage.getItem(topPanelVisibleStorageKey) !== "false";
+}
+
+function toggleTopPanel() {
+  isTopPanelVisible.value = !isTopPanelVisible.value;
+}
+
 function cjkFontFamily(mode: CjkFallbackMode) {
   if (mode === "default") return undefined;
 
@@ -2658,11 +2753,127 @@ function rowNumberStyle() {
   };
 }
 
+function columnIndexByKey(key: EncodingColumnKey) {
+  return columns.findIndex((column) => column.key === key);
+}
+
+function movableColumn(key: EncodingColumnKey) {
+  return key !== "row_number";
+}
+
+function restoreColumnOrder(): EncodingColumnKey[] {
+  const defaultOrder = columns.map((column) => column.key);
+  try {
+    const rawOrder = window.localStorage.getItem(columnOrderStorageKey);
+    if (!rawOrder) return defaultOrder;
+    const parsed = JSON.parse(rawOrder) as unknown;
+    if (!Array.isArray(parsed)) return defaultOrder;
+
+    const knownKeys = new Set(defaultOrder);
+    const restored = parsed.filter(
+      (key): key is EncodingColumnKey =>
+        typeof key === "string" && knownKeys.has(key as EncodingColumnKey),
+    );
+    return [
+      "row_number",
+      ...restored.filter((key) => key !== "row_number"),
+      ...defaultOrder.filter((key) => !restored.includes(key)),
+    ];
+  } catch {
+    window.localStorage.removeItem(columnOrderStorageKey);
+    return defaultOrder;
+  }
+}
+
+function persistColumnOrder() {
+  window.localStorage.setItem(columnOrderStorageKey, JSON.stringify(columnOrder.value));
+}
+
+function startColumnReorder(columnKey: EncodingColumnKey, event: PointerEvent) {
+  if (!movableColumn(columnKey)) return;
+  const target = event.target as HTMLElement | null;
+  if (target?.closest("button, input, select, textarea")) return;
+  event.preventDefault();
+  lastColumnPointerX = event.clientX;
+  lastColumnPointerY = event.clientY;
+  activeColumnDragElement = event.currentTarget as HTMLElement | null;
+  window.addEventListener("pointermove", trackColumnPointer);
+  window.addEventListener("pointerup", finishColumnReorder);
+  columnDragTimer = window.setTimeout(() => {
+    draggedColumnKey = columnKey;
+    columnDropTargetKey.value = null;
+    activeColumnDragElement?.classList.add("reordering");
+    document.body.style.userSelect = "none";
+  }, 350);
+}
+
+function trackColumnPointer(event: PointerEvent) {
+  lastColumnPointerX = event.clientX;
+  lastColumnPointerY = event.clientY;
+  if (draggedColumnKey) {
+    event.preventDefault();
+    const targetKey = columnKeyFromPoint(event.clientX, event.clientY);
+    columnDropTargetKey.value =
+      targetKey && targetKey !== draggedColumnKey && movableColumn(targetKey)
+        ? targetKey
+        : null;
+  }
+}
+
+function cancelColumnReorder() {
+  if (columnDragTimer !== undefined) {
+    window.clearTimeout(columnDragTimer);
+    columnDragTimer = undefined;
+  }
+  draggedColumnKey = null;
+  columnDropTargetKey.value = null;
+  activeColumnDragElement?.classList.remove("reordering");
+  activeColumnDragElement = null;
+  document.body.style.userSelect = "";
+  window.removeEventListener("pointermove", trackColumnPointer);
+  window.removeEventListener("pointerup", finishColumnReorder);
+}
+
+function columnKeyFromPoint(x: number, y: number): EncodingColumnKey | null {
+  const element = document
+    .elementFromPoint(x, y)
+    ?.closest<HTMLElement>("[data-column-key]");
+  const key = element?.dataset.columnKey;
+  return columns.some((column) => column.key === key) ? (key as EncodingColumnKey) : null;
+}
+
+function finishColumnReorder(event: PointerEvent) {
+  lastColumnPointerX = event.clientX;
+  lastColumnPointerY = event.clientY;
+  const sourceKey = draggedColumnKey;
+  const targetKey = columnKeyFromPoint(lastColumnPointerX, lastColumnPointerY);
+  cancelColumnReorder();
+  if (!sourceKey || !targetKey || sourceKey === targetKey || !movableColumn(targetKey)) return;
+
+  const nextOrder = columnOrder.value.filter((key) => key !== sourceKey);
+  const targetIndex = nextOrder.indexOf(targetKey);
+  if (targetIndex < 0) return;
+  nextOrder.splice(targetIndex, 0, sourceKey);
+  columnOrder.value = nextOrder;
+  persistColumnOrder();
+}
+
 function cellStyle(columnIndex: number, fallbackColumn?: "character" | "note") {
   return {
     fontFamily: fallbackColumn ? cjkFontFamily(fallbackPrefs.value[fallbackColumn]) : undefined,
     fontSize: `${columnFontSizes.value[columnIndex]}px`,
   };
+}
+
+function encodingCellStyle(key: keyof EncodingRow) {
+  const columnIndex = columnIndexByKey(key);
+  if (key === "original_char") return cellStyle(columnIndex, "character");
+  if (key === "note") return cellStyle(columnIndex, "note");
+  return cellStyle(columnIndex);
+}
+
+function disablesTextCorrection(key: keyof EncodingRow) {
+  return key === "original_char";
 }
 
 function startResize(columnIndex: number, event: PointerEvent) {
@@ -2739,7 +2950,29 @@ function refreshDefaultCheckMessages() {
 
 <template>
   <main class="encoding-shell" :class="appShellClasses">
-    <section class="encoding-top-panel">
+    <div v-if="!isTopPanelVisible" class="compact-top-bar">
+      <button
+        class="top-panel-toggle"
+        type="button"
+        @click="toggleTopPanel"
+      >
+        {{ t("common.showControls") }}
+      </button>
+      <p class="compact-file-path">{{ displayedJsonPath }}</p>
+      <span class="compact-result-count">{{ filteredRows.length }} / {{ rows.length }}</span>
+      <p
+        class="compact-message"
+        :class="{
+          'error-message': errorMessage,
+          'status-message': !errorMessage && displayedMessage,
+          empty: !displayedMessage,
+        }"
+      >
+        {{ displayedMessage || "\u00a0" }}
+      </p>
+    </div>
+
+    <section v-if="isTopPanelVisible" class="encoding-top-panel">
       <header class="encoding-toolbar">
         <div class="encoding-toolbar-controls">
           <select v-model="themeMode" class="theme-select" :aria-label="t('common.theme')">
@@ -2805,110 +3038,75 @@ function refreshDefaultCheckMessages() {
         <p class="encoding-file-status">{{ displayedJsonPath }}</p>
       </header>
 
-      <div class="encoding-search-panel">
-        <div class="search-main">
-          <input
-            v-model="searchText"
-            type="search"
-            :placeholder="t('common.searchText')"
-            :aria-label="t('common.searchText')"
-          />
-          <label class="checkbox-label case-checkbox">
-            <input v-model="isCaseSensitiveSearch" type="checkbox" />
-            <span>{{ t("main.caseSensitive") }}</span>
-          </label>
-          <span class="result-count">
-            {{ filteredRows.length }} / {{ rows.length }}
-          </span>
-        </div>
-
-        <div class="search-columns" aria-label="Search columns">
-          <label
-            v-for="column in searchableColumns"
-            :key="column"
-            class="checkbox-label"
-          >
-            <input
-              v-model="selectedSearchColumns"
-              type="checkbox"
-              :value="column"
-            />
-            <span>{{ column }}</span>
-          </label>
-        </div>
-
-        <div class="stats-panel">
-          <div class="stats-list">
-            <button
-              type="button"
-              :class="{ active: activeFilters.length === 0 }"
-              @click="activeFilters = []"
-            >
-              {{ t("common.all") }} {{ rows.length }}
-            </button>
-            <button
-              v-for="filter in filterOptions"
-              :key="filter"
-              type="button"
-              :class="{ active: activeFilters.includes(filter) }"
-              @click="toggleFilter(filter)"
-            >
-              {{ encodingFilterLabel(filter) }} {{ filterCounts[filter] }}
-            </button>
-          </div>
-
-        </div>
-      </div>
-
-      <div class="encoding-message-tools-row">
-        <p
-          class="encoding-message-slot"
-          :class="{
-            'error-message': errorMessage,
-            'status-message': !errorMessage && statusMessage,
-            empty: !displayedMessage,
-          }"
-        >
-          {{ displayedMessage || "\u00a0" }}
-        </p>
-        <div class="encoding-row-tools">
-          <div class="row-range-filter" aria-label="Filter row range">
-            <span>{{ t("main.rows") }}</span>
-            <input
-              v-model="rowFilterStart"
-              type="text"
-              inputmode="numeric"
-              aria-label="Filter from row"
-              :placeholder="t('main.min')"
-            />
-            <span>{{ t("main.to") }}</span>
-            <input
-              v-model="rowFilterEnd"
-              type="text"
-              inputmode="numeric"
-              aria-label="Filter to row"
-              :placeholder="t('main.max')"
-            />
-            <button type="button" :disabled="!hasActiveRowFilter" @click="clearRowFilter">
-              {{ t("common.clear") }}
-            </button>
-          </div>
-
-          <form class="go-to-row" aria-label="Go to row" @submit.prevent="goToRow">
-            <label for="encoding-go-to-row">{{ t("main.goToRow") }}</label>
-            <input
-              id="encoding-go-to-row"
-              v-model="goToRowValue"
-              type="number"
-              min="1"
-              :max="rows.length || undefined"
-              inputmode="numeric"
-            />
-            <button type="submit" :disabled="rows.length === 0">{{ t("main.go") }}</button>
-          </form>
-        </div>
-      </div>
+      <EncodingSearchControls
+        ref="topSearchControls"
+        v-model:search-text="searchText"
+        v-model:is-case-sensitive-search="isCaseSensitiveSearch"
+        v-model:selected-search-columns="selectedSearchColumns"
+        v-model:row-filter-start="rowFilterStart"
+        v-model:row-filter-end="rowFilterEnd"
+        v-model:go-to-row-value="goToRowValue"
+        :active-filters="activeFilters"
+        :displayed-message="displayedMessage"
+        :error-message="errorMessage"
+        :filter-counts="filterCounts"
+        :filter-label="encodingFilterLabel"
+        :filter-options="filterOptions"
+        :filtered-rows-length="filteredRows.length"
+        :go-to-max-row="rows.length"
+        :has-active-row-filter="hasActiveRowFilter"
+        :rows-length="rows.length"
+        :searchable-columns="searchableColumns"
+        @clear-filters="activeFilters = []"
+        @clear-row-filter="clearRowFilter"
+        @go-to-row="goToRow"
+        @toggle-filter="toggleFilter"
+      />
     </section>
+
+    <div
+      v-if="isSearchOverlayOpen"
+      class="search-overlay-backdrop"
+      role="presentation"
+      @click.self="closeSearchOverlay"
+    >
+      <div class="search-overlay-stack">
+        <button
+          class="search-overlay-close"
+          type="button"
+          :aria-label="t('common.close')"
+          @click="closeSearchOverlay"
+        >
+          ×
+        </button>
+        <section class="search-overlay-panel" role="dialog" aria-modal="true">
+        <EncodingSearchControls
+          ref="overlaySearchControls"
+          v-model:search-text="searchText"
+          v-model:is-case-sensitive-search="isCaseSensitiveSearch"
+          v-model:selected-search-columns="selectedSearchColumns"
+          v-model:row-filter-start="rowFilterStart"
+          v-model:row-filter-end="rowFilterEnd"
+          v-model:go-to-row-value="goToRowValue"
+          :active-filters="activeFilters"
+          :displayed-message="displayedMessage"
+          :error-message="errorMessage"
+          :filter-counts="filterCounts"
+          :filter-label="encodingFilterLabel"
+          :filter-options="filterOptions"
+          :filtered-rows-length="filteredRows.length"
+          :go-to-max-row="rows.length"
+          :has-active-row-filter="hasActiveRowFilter"
+          :rows-length="rows.length"
+          :searchable-columns="searchableColumns"
+          @clear-filters="activeFilters = []"
+          @clear-row-filter="clearRowFilter"
+          @go-to-row="goToRow"
+          @toggle-filter="toggleFilter"
+        />
+        </section>
+      </div>
+    </div>
 
     <section
       ref="tableWrap"
@@ -2918,13 +3116,18 @@ function refreshDefaultCheckMessages() {
     >
       <div class="encoding-grid header-row" :style="{ gridTemplateColumns }">
         <div
-          v-for="(column, index) in columns"
+          v-for="column in displayedColumns"
           :key="column.key"
           class="header-cell"
+          :class="{ 'drop-target': columnDropTargetKey === column.key }"
+          :data-column-key="column.key"
         >
-          <div class="header-content">
+          <div
+            class="header-content"
+            @pointerdown="startColumnReorder(column.key, $event)"
+          >
             <span>{{ column.label }}</span>
-            <div v-if="index === 0" class="header-row-actions">
+            <div v-if="column.key === 'row_number'" class="header-row-actions">
               <input
                 class="row-select-checkbox"
                 type="checkbox"
@@ -2944,21 +3147,21 @@ function refreshDefaultCheckMessages() {
               >
                 +
               </button>
-              <span class="font-size-readout">{{ columnFontSizes[index] }}px</span>
+              <span class="font-size-readout">{{ columnFontSizes[columnIndexByKey(column.key)] }}px</span>
             </div>
             <div v-else class="font-size-controls">
               <button
                 type="button"
                 :aria-label="`Decrease ${column.label} font size`"
-                @click="adjustColumnFontSize(index, -1)"
+                @click="adjustColumnFontSize(columnIndexByKey(column.key), -1)"
               >
                 -
               </button>
-              <span>{{ columnFontSizes[index] }}px</span>
+              <span>{{ columnFontSizes[columnIndexByKey(column.key)] }}px</span>
               <button
                 type="button"
                 :aria-label="`Increase ${column.label} font size`"
-                @click="adjustColumnFontSize(index, 1)"
+                @click="adjustColumnFontSize(columnIndexByKey(column.key), 1)"
               >
                 +
               </button>
@@ -2968,7 +3171,7 @@ function refreshDefaultCheckMessages() {
             class="resize-handle"
             type="button"
             :aria-label="`Resize ${column.label}`"
-            @pointerdown="startResize(index, $event)"
+            @pointerdown="startResize(columnIndexByKey(column.key), $event)"
           />
         </div>
         <div class="header-cell table-end-spacer" aria-hidden="true" />
@@ -2995,74 +3198,75 @@ function refreshDefaultCheckMessages() {
           :data-encoding-row="rowIndex + 1"
           :style="{ gridTemplateColumns }"
         >
-          <div class="row-number-cell" :style="rowNumberStyle()">
-            <input
-              class="row-select-checkbox"
-              type="checkbox"
-              :aria-label="`Select row ${rowIndex + 1}`"
-              :checked="selectedRowIds.has(getRowIdentity(row))"
-              @change="handleRowSelectionChange(row, $event)"
-            />
-            <div class="row-actions">
-              <template v-if="pendingDeleteIndex === rowIndex">
-                <button
-                  class="row-action-btn cancel-delete-btn"
-                  type="button"
-                  aria-label="Cancel delete row"
-                  @click="cancelDeleteRow"
-                >
-                  X
-                </button>
-                <button
-                  class="row-action-btn confirm-delete-btn"
-                  type="button"
-                  aria-label="Confirm delete row"
-                  @click="confirmDeleteRow(rowIndex)"
-                >
-                  O
-                </button>
-              </template>
-              <template v-else>
-                <button
-                  class="row-action-btn add-row-btn"
-                  type="button"
-                  aria-label="Add row below"
-                  @click="addRowAfter(rowIndex)"
-                >
-                  +
-                </button>
-                <button
-                  class="row-action-btn request-delete-btn"
-                  type="button"
-                  aria-label="Delete row"
-                  @click="requestDeleteRow(rowIndex)"
-                >
-                  ×
-                </button>
-              </template>
+          <template v-for="column in displayedColumns" :key="column.key">
+            <div
+              v-if="column.key === 'row_number'"
+              class="row-number-cell"
+              :style="rowNumberStyle()"
+            >
+              <input
+                class="row-select-checkbox"
+                type="checkbox"
+                :aria-label="`Select row ${rowIndex + 1}`"
+                :checked="selectedRowIds.has(getRowIdentity(row))"
+                @change="handleRowSelectionChange(row, $event)"
+              />
+              <div class="row-actions">
+                <template v-if="pendingDeleteIndex === rowIndex">
+                  <button
+                    class="row-action-btn cancel-delete-btn"
+                    type="button"
+                    aria-label="Cancel delete row"
+                    @click="cancelDeleteRow"
+                  >
+                    X
+                  </button>
+                  <button
+                    class="row-action-btn confirm-delete-btn"
+                    type="button"
+                    aria-label="Confirm delete row"
+                    @click="confirmDeleteRow(rowIndex)"
+                  >
+                    O
+                  </button>
+                </template>
+                <template v-else>
+                  <button
+                    class="row-action-btn add-row-btn"
+                    type="button"
+                    aria-label="Add row below"
+                    @click="addRowAfter(rowIndex)"
+                  >
+                    +
+                  </button>
+                  <button
+                    class="row-action-btn request-delete-btn"
+                    type="button"
+                    aria-label="Delete row"
+                    @click="requestDeleteRow(rowIndex)"
+                  >
+                    ×
+                  </button>
+                </template>
+              </div>
+              <span class="row-number">{{ rowIndex + 1 }}</span>
             </div>
-            <span class="row-number">{{ rowIndex + 1 }}</span>
-          </div>
-          <div class="textarea-cell" :style="cellStyle(1, 'character')">
-            <textarea v-model="row.original_char" aria-label="char" />
-            <div class="textarea-measure">{{ row.original_char || " " }}</div>
-          </div>
-          <div class="textarea-cell" :style="cellStyle(2)">
-            <textarea
-              v-model="row.code"
-              aria-label="code"
-              @blur="normalizeEditedCode(row)"
-            />
-            <div class="textarea-measure">{{ row.code || " " }}</div>
-          </div>
-          <div class="textarea-cell" :style="cellStyle(3)">
-            <textarea v-model="row.width" aria-label="width" />
-            <div class="textarea-measure">{{ row.width || " " }}</div>
-          </div>
-          <div class="textarea-cell" :style="cellStyle(4, 'note')">
-            <textarea v-model="row.note" aria-label="note" />
-            <div class="textarea-measure">{{ row.note || " " }}</div>
-          </div>
+            <div
+              v-else
+              class="textarea-cell"
+              :style="encodingCellStyle(column.key)"
+            >
+              <textarea
+                v-model="row[column.key]"
+                :aria-label="column.label"
+                :autocapitalize="disablesTextCorrection(column.key) ? 'off' : undefined"
+                :autocorrect="disablesTextCorrection(column.key) ? 'off' : undefined"
+                :spellcheck="disablesTextCorrection(column.key) ? false : undefined"
+                @blur="column.key === 'code' ? normalizeEditedCode(row) : undefined"
+              />
+              <div class="textarea-measure">{{ row[column.key] || " " }}</div>
+            </div>
+          </template>
           <div class="table-end-spacer" aria-hidden="true" />
         </div>
 
@@ -3289,6 +3493,168 @@ button {
   background: var(--page-bg);
 }
 
+.encoding-shell.top-panel-hidden {
+  gap: 6px;
+  padding-top: 6px;
+}
+
+.encoding-shell .compact-top-bar {
+  display: grid;
+  grid-template-columns: max-content minmax(90px, 1fr) max-content minmax(90px, 0.75fr);
+  gap: 6px;
+  align-items: center;
+  min-height: 26px;
+  min-width: 0;
+}
+
+.encoding-shell .top-panel-toggle {
+  align-self: flex-start;
+  min-height: 22px;
+  border: 1px solid var(--control-border);
+  border-radius: 6px;
+  padding: 2px 6px;
+  color: var(--control-text);
+  background: var(--panel-bg);
+  font-size: 11px;
+  font-weight: 650;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.encoding-shell .top-panel-toggle:hover {
+  border-color: var(--primary);
+  color: var(--primary);
+  background: var(--control-hover-bg);
+}
+
+.encoding-shell .compact-file-path,
+.encoding-shell .compact-message {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.encoding-shell .compact-file-path,
+.encoding-shell .compact-result-count {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.encoding-shell .compact-result-count {
+  white-space: nowrap;
+}
+
+.encoding-shell .compact-message {
+  min-height: 22px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  padding: 2px 6px;
+  font-size: 11px;
+  line-height: 1.25;
+}
+
+.encoding-shell .compact-message.empty {
+  border-color: var(--info-border);
+  color: transparent;
+  background: var(--info-bg);
+}
+
+.encoding-shell .search-overlay-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 35;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: rgb(15 23 42 / 45%);
+}
+
+.encoding-shell .search-overlay-stack {
+  display: grid;
+  width: min(960px, 100%);
+  max-height: calc(100vh - 24px);
+  gap: 8px;
+}
+
+.encoding-shell .search-overlay-panel {
+  position: relative;
+  max-height: calc(100vh - 60px);
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px 12px;
+  color: var(--text);
+  background: var(--panel-bg);
+  box-shadow: 0 18px 45px rgb(15 23 42 / 24%);
+}
+
+.encoding-shell.theme-dark .search-overlay-panel {
+  border-color: #475569;
+  background: #111827;
+  box-shadow: 0 18px 60px rgb(0 0 0 / 42%);
+}
+
+.encoding-shell .search-overlay-close {
+  justify-self: end;
+  width: 24px;
+  height: 24px;
+  border: 1px solid var(--control-border);
+  border-radius: 6px;
+  color: var(--control-text);
+  background: var(--panel-bg);
+  font-size: 16px;
+  line-height: 1;
+}
+
+.encoding-shell .search-overlay-close:hover {
+  border-color: var(--danger);
+  color: var(--danger);
+  background: var(--danger-bg-soft);
+}
+
+.encoding-shell .search-overlay-panel .search-panel {
+  display: grid;
+  gap: 8px;
+  padding-right: 28px;
+}
+
+.encoding-shell .search-overlay-panel .search-columns,
+.encoding-shell .search-overlay-panel .stats-list {
+  gap: 6px 10px;
+}
+
+.encoding-shell .search-overlay-panel .message-tools-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.encoding-shell .search-overlay-panel .message-slot {
+  min-height: 29px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  padding: 5px 8px;
+  font-size: 12px;
+  line-height: 1.25;
+}
+
+.encoding-shell .search-overlay-panel .message-slot.empty {
+  border-color: var(--info-border);
+  color: transparent;
+  background: var(--info-bg);
+}
+
+.encoding-shell .search-overlay-panel .secondary-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
 .theme-dark {
   --border: #334155;
   --border-soft: #243244;
@@ -3367,8 +3733,8 @@ button {
 }
 
 .encoding-toolbar select,
-.search-main input,
-.go-to-row input {
+.encoding-shell .text-search-group input[type="search"],
+.encoding-shell .go-to-row input {
   border: 1px solid var(--control-border);
   color: var(--input-text);
   background: var(--panel-bg);
@@ -3403,55 +3769,101 @@ button {
   background: var(--danger-hover);
 }
 
-.encoding-search-panel {
+.encoding-shell .search-panel {
   display: flex;
   flex-direction: column;
   gap: 5px;
   min-width: 0;
 }
 
-.search-main {
+.encoding-shell .search-summary-row {
   display: grid;
-  grid-template-columns: minmax(180px, 1fr) max-content auto;
+  grid-template-columns: minmax(260px, 1fr) max-content auto;
   gap: 8px;
   align-items: center;
+  min-width: 0;
 }
 
-.search-main input {
+.encoding-shell .filter-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.encoding-shell .filter-group-label {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 750;
+  white-space: nowrap;
+}
+
+.encoding-shell .text-search-group input[type="search"] {
+  appearance: none;
+  -webkit-appearance: none;
+  min-width: 150px;
+  flex: 1 1 190px;
   min-height: 30px;
+  border: 1px solid var(--control-border);
   border-radius: 6px;
   padding: 5px 8px;
+  color: var(--input-text);
+  background: var(--panel-bg);
   font-size: 13px;
 }
 
-.result-count,
-.checkbox-label,
-.go-to-row {
+.encoding-shell .text-search-group input[type="search"]:focus {
+  outline: 2px solid var(--primary);
+  outline-offset: -1px;
+}
+
+.encoding-shell .text-search-group input[type="search"]::-webkit-search-cancel-button,
+.encoding-shell .text-search-group input[type="search"]::-webkit-search-decoration {
+  -webkit-appearance: none;
+}
+
+.encoding-shell .result-count {
+  justify-self: end;
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.encoding-shell .checkbox-label,
+.encoding-shell .go-to-row {
   color: var(--text-soft);
   font-size: 12px;
 }
 
-.search-columns,
-.stats-list,
-.stats-panel {
+.encoding-shell .search-columns {
   display: flex;
   flex-wrap: wrap;
-  gap: 5px 10px;
-  align-items: center;
+  gap: 5px 12px;
+  min-width: 0;
+  max-width: 100%;
 }
 
-.stats-panel {
-  justify-content: space-between;
+.encoding-shell .search-columns .checkbox-label {
+  max-width: 100%;
 }
 
-.encoding-row-tools {
-  display: inline-flex;
+.encoding-shell .stats-panel {
+  display: block;
+  width: 100%;
+  min-width: 0;
+}
+
+.encoding-shell .stats-list {
+  display: flex;
   flex-wrap: wrap;
-  justify-content: flex-end;
-  gap: 8px;
+  gap: 5px;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
 }
 
-.encoding-message-tools-row {
+.encoding-shell .message-tools-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 8px;
@@ -3460,86 +3872,9 @@ button {
   min-width: 0;
 }
 
-.stats-list {
-  flex: 1;
-  min-width: 240px;
-}
-
-.stats-list button,
-.go-to-row button {
-  border: 1px solid var(--control-border);
-  border-radius: 6px;
-  padding: 3px 7px;
-  color: var(--text-soft);
-  background: var(--panel-bg);
-  font-size: 11px;
-  line-height: 1.2;
-  white-space: nowrap;
-}
-
-.stats-list button:hover {
-  border-color: var(--primary);
-  color: var(--primary);
-}
-
-.stats-list button.active {
-  border-color: var(--primary);
-  color: var(--on-accent);
-  background: var(--primary);
-}
-
-.go-to-row,
-.row-range-filter {
-  display: inline-flex;
-  gap: 6px;
-  align-items: center;
-  white-space: nowrap;
-}
-
-.go-to-row input,
-.row-range-filter input {
-  width: 72px;
-  min-height: 28px;
-  border: 1px solid var(--control-border);
-  border-radius: 6px;
-  padding: 4px 6px;
-  color: var(--input-text);
-  background: var(--panel-bg);
-  font-size: 12px;
-}
-
-.go-to-row input:focus,
-.row-range-filter input:focus {
-  outline: 2px solid var(--primary);
-  outline-offset: -1px;
-}
-
-.go-to-row button,
-.row-range-filter button {
-  min-height: 28px;
-  padding: 4px 10px;
-  font-size: 12px;
-}
-
-.row-range-filter button:disabled {
-  color: var(--muted);
-  background: var(--disabled-bg);
-  cursor: not-allowed;
-}
-
-.checkbox-label {
-  display: inline-flex;
-  gap: 6px;
-  align-items: center;
-}
-
-.case-checkbox {
-  white-space: nowrap;
-}
-
-.encoding-message-slot {
+.encoding-shell .message-slot {
   margin: 0;
-  min-height: 27px;
+  min-height: 29px;
   border: 1px solid transparent;
   border-radius: 6px;
   padding: 5px 8px;
@@ -3551,8 +3886,94 @@ button {
   white-space: nowrap;
 }
 
-.encoding-message-slot.empty {
-  visibility: hidden;
+.encoding-shell .message-slot.empty {
+  border-color: var(--info-border);
+  color: transparent;
+  background: var(--info-bg);
+}
+
+.encoding-shell .secondary-actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.encoding-shell .stats-list button,
+.encoding-shell .go-to-row button {
+  flex: 0 1 auto;
+  max-width: 100%;
+  border: 1px solid var(--control-border);
+  border-radius: 6px;
+  padding: 3px 7px;
+  color: var(--text-soft);
+  background: var(--header-bg);
+  font-size: 11px;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.encoding-shell .stats-list button:hover {
+  border-color: var(--primary);
+  color: var(--primary);
+}
+
+.encoding-shell .stats-list button.active {
+  border-color: var(--primary);
+  color: var(--on-accent);
+  background: var(--primary);
+}
+
+.encoding-shell .go-to-row,
+.encoding-shell .row-range-filter {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  color: var(--text-soft);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.encoding-shell .go-to-row input,
+.encoding-shell .row-range-filter input {
+  width: 72px;
+  min-height: 28px;
+  border: 1px solid var(--control-border);
+  border-radius: 6px;
+  padding: 4px 6px;
+  color: var(--input-text);
+  background: var(--panel-bg);
+  font-size: 12px;
+}
+
+.encoding-shell .go-to-row input:focus,
+.encoding-shell .row-range-filter input:focus {
+  outline: 2px solid var(--primary);
+  outline-offset: -1px;
+}
+
+.encoding-shell .go-to-row button,
+.encoding-shell .row-range-filter button {
+  min-height: 28px;
+  padding: 4px 10px;
+  font-size: 12px;
+}
+
+.encoding-shell .row-range-filter button:disabled {
+  color: var(--muted);
+  background: var(--disabled-bg);
+  cursor: not-allowed;
+}
+
+.encoding-shell .checkbox-label {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.encoding-shell .case-checkbox {
+  white-space: nowrap;
 }
 
 .error-message {
@@ -3622,6 +4043,26 @@ button {
   flex-direction: column;
   justify-content: center;
   gap: 5px;
+  cursor: grab;
+}
+
+.header-content:active {
+  cursor: grabbing;
+}
+
+.header-content.reordering {
+  outline: 2px solid var(--primary);
+  outline-offset: -2px;
+  border-radius: 6px;
+  color: var(--text);
+  background: color-mix(in srgb, var(--primary) 20%, var(--header-bg));
+  box-shadow: inset 0 0 0 1px var(--primary);
+}
+
+.header-cell.drop-target {
+  color: var(--text);
+  background: color-mix(in srgb, var(--success) 18%, var(--header-bg));
+  box-shadow: inset 0 0 0 2px var(--success);
 }
 
 .header-row-actions {
@@ -3904,7 +4345,8 @@ button {
 }
 
 @media (max-width: 980px) {
-  .encoding-message-tools-row {
+  .encoding-shell .search-summary-row,
+  .encoding-shell .message-tools-row {
     grid-template-columns: 1fr;
   }
 

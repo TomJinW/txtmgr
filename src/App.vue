@@ -25,6 +25,7 @@ import LanguageDialog from "./components/LanguageDialog.vue";
 import LlmSettingsDialog, {
   type LlmServerSettings,
 } from "./components/LlmSettingsDialog.vue";
+import MainSearchControls from "./components/MainSearchControls.vue";
 import SrtExportDialog, {
   type SrtExportEncoding,
 } from "./components/SrtExportDialog.vue";
@@ -33,6 +34,8 @@ import {
   cjkFallbackOptions,
   cjkFallbackStorageKey,
   columnFontSizeStorageKey,
+  columnOrderStorageKey,
+  columnVisibilityStorageKey,
   columns,
   columnWidthStorageKey,
   defaultColumnFontSizes,
@@ -44,6 +47,7 @@ import {
   stateOptions,
   textSearchColumns,
   themeStorageKey,
+  topPanelVisibleStorageKey,
   virtualOverscanRows,
 } from "./constants";
 import {
@@ -62,7 +66,7 @@ import {
   t,
   type AppLanguage,
 } from "./i18n";
-import { windowsShortcutMatches, type ShortcutAction } from "./shortcuts";
+import { shortcutMatches, windowsShortcutMatches, type ShortcutAction } from "./shortcuts";
 import type {
   CjkFallbackColumn,
   CjkFallbackMode,
@@ -79,6 +83,9 @@ import type {
 } from "./types";
 const columnWidths = ref(restoreColumnWidths());
 const columnFontSizes = ref(restoreColumnFontSizes());
+type ColumnKey = (typeof columns)[number]["key"];
+const columnOrder = ref<ColumnKey[]>(restoreColumnOrder());
+const hiddenColumnKeys = ref<Set<ColumnKey>>(restoreHiddenColumnKeys());
 const cjkFallbackPrefs = ref(restoreCjkFallbackPrefs());
 const rows = ref<SentenceRow[]>([]);
 const fileName = ref("");
@@ -112,6 +119,7 @@ const isLanguageDialogOpen = ref(false);
 const isAiTranslationDialogOpen = ref(false);
 const isAiTranslationSessionDialogOpen = ref(false);
 const isBulkStateDialogOpen = ref(false);
+const isSearchOverlayOpen = ref(false);
 const llmSettingsStorageKey = "txtmgr.llmServerSettings.v1";
 const llmSettings = ref<LlmServerSettings>(restoreLlmSettings());
 const aiTranslationSettingsStorageKey = "txtmgr.aiTranslationSettings.v1";
@@ -139,6 +147,7 @@ const excelImportTitleColumn = ref("");
 const excelImportOriginalColumn = ref("3");
 const excelImportTranslatedColumn = ref("4");
 const excelImportNoteColumn = ref("");
+const excelImportAiOutputColumn = ref("");
 const excelImportStateColumn = ref("");
 const excelImportFileNameMode = ref<FileNameImportMode>("none");
 const excelImportFileNameColumn = ref("");
@@ -177,7 +186,10 @@ const isDeleteSelectedConfirmOpen = ref(false);
 const undoStack = ref<string[]>([]);
 const redoStack = ref<string[]>([]);
 const themeMode = ref<ThemeMode>(restoreThemeMode());
+const isTopPanelVisible = ref(restoreTopPanelVisible());
 const tableWrap = ref<HTMLElement | null>(null);
+const topSearchControls = ref<InstanceType<typeof MainSearchControls> | null>(null);
+const overlaySearchControls = ref<InstanceType<typeof MainSearchControls> | null>(null);
 const tableScrollTop = ref(0);
 const tableViewportHeight = ref(600);
 const rowHeights = ref<Record<number, number>>({});
@@ -210,7 +222,15 @@ let unlistenRedoTableChange: UnlistenFn | undefined;
 let unlistenClearList: UnlistenFn | undefined;
 let unlistenDeleteSelected: UnlistenFn | undefined;
 let unlistenBulkState: UnlistenFn | undefined;
+let unlistenToggleMainColumnVisibility: UnlistenFn | undefined;
+let unlistenToggleMainTopPanel: UnlistenFn | undefined;
 let pendingEditSnapshot: string | null = null;
+let columnDragTimer: number | undefined;
+let draggedColumnKey: ColumnKey | null = null;
+let activeColumnDragElement: HTMLElement | null = null;
+let lastColumnPointerX = 0;
+let lastColumnPointerY = 0;
+const columnDropTargetKey = ref<ColumnKey | null>(null);
 const rowResizeObservers = new Map<number, ResizeObserver>();
 const rowElements = new Map<number, HTMLElement>();
 
@@ -222,9 +242,21 @@ const systemThemeQuery = window.matchMedia("(prefers-color-scheme: dark)");
 const systemThemeMode = ref<"light" | "dark">(getSystemThemeMode());
 const tableEndSpacerWidth = 24;
 
+const displayedColumns = computed(() =>
+  columnOrder.value
+    .map((key) => columns.find((column) => column.key === key))
+    .filter(
+      (column): column is (typeof columns)[number] =>
+        column !== undefined &&
+        (column.key === "row_number" || !hiddenColumnKeys.value.has(column.key)),
+    ),
+);
+
 const gridTemplateColumns = computed(() =>
   [
-    ...columnWidths.value.map((width) => `${width}px`),
+    ...displayedColumns.value.map(
+      (column) => `${columnWidths.value[columnIndexByKey(column.key)]}px`,
+    ),
     `${tableEndSpacerWidth}px`,
   ].join(" "),
 );
@@ -235,6 +267,7 @@ const effectiveThemeMode = computed<"light" | "dark">(() =>
 
 const appShellClasses = computed(() => [
   `theme-${effectiveThemeMode.value}`,
+  { "top-panel-hidden": !isTopPanelVisible.value },
   { "platform-linux": isLinuxPlatform() },
 ]);
 
@@ -423,6 +456,7 @@ void restoreDraft();
 registerMenuListeners();
 void syncNativeChrome();
 window.addEventListener("focus", handleWindowFocus);
+window.addEventListener("keydown", handleGlobalShortcut);
 window.addEventListener("keydown", handleWindowsMenuShortcut);
 window.addEventListener("keydown", handleAiTranslationModeKey);
 window.addEventListener("keyup", handleAiTranslationModeKey);
@@ -458,6 +492,13 @@ watch(
 watch(themeMode, () => {
   persistThemeMode();
   void syncNativeChrome();
+});
+
+watch(isTopPanelVisible, () => {
+  persistTopPanelVisible();
+  nextTick(() => {
+    updateTableViewport();
+  });
 });
 
 watch(currentLanguage, () => {
@@ -533,6 +574,7 @@ watch(renderedRows, () => {
 });
 
 onBeforeUnmount(() => {
+  cancelColumnReorder();
   rowResizeObservers.forEach((observer) => observer.disconnect());
   rowResizeObservers.clear();
   rowElements.clear();
@@ -555,7 +597,10 @@ onBeforeUnmount(() => {
   unlistenClearList?.();
   unlistenDeleteSelected?.();
   unlistenBulkState?.();
+  unlistenToggleMainColumnVisibility?.();
+  unlistenToggleMainTopPanel?.();
   window.removeEventListener("focus", handleWindowFocus);
+  window.removeEventListener("keydown", handleGlobalShortcut);
   window.removeEventListener("keydown", handleWindowsMenuShortcut);
   window.removeEventListener("keydown", handleAiTranslationModeKey);
   systemThemeQuery.removeEventListener("change", handleSystemThemeChange);
@@ -583,9 +628,14 @@ function isWindowsPlatform() {
   return /Windows/i.test(window.navigator.userAgent);
 }
 
+function isMacPlatform() {
+  return /Macintosh|Mac OS X/i.test(window.navigator.userAgent);
+}
+
 function handleWindowFocus() {
   syncHistoryMenuState();
   syncAppLanguageMenu();
+  syncMainColumnVisibilityMenu();
 }
 
 function handleAiTranslationModeKey(event: KeyboardEvent) {
@@ -594,6 +644,31 @@ function handleAiTranslationModeKey(event: KeyboardEvent) {
 
 function resetAiTranslationModeKey() {
   isAiTranslationFakeMode.value = false;
+}
+
+function handleGlobalShortcut(event: KeyboardEvent) {
+  if (shortcutMatches(event, "open_search_panel", isMacPlatform())) {
+    event.preventDefault();
+    if (hasOpenMainDialog()) return;
+    openSearchOverlay();
+    return;
+  }
+
+  if (event.key === "Escape" && isSearchOverlayOpen.value) {
+    event.preventDefault();
+    closeSearchOverlay();
+  }
+}
+
+function openSearchOverlay() {
+  isSearchOverlayOpen.value = true;
+  nextTick(() => {
+    overlaySearchControls.value?.focusSearchInput();
+  });
+}
+
+function closeSearchOverlay() {
+  isSearchOverlayOpen.value = false;
 }
 
 async function openEncodingManagerWindow() {
@@ -644,6 +719,7 @@ function handleWindowsMenuShortcut(event: KeyboardEvent) {
     { action: "export_excel", run: () => void openExcelExportDialog() },
     { action: "import_srt", run: () => void openSrtImportDialog() },
     { action: "export_srt", run: () => void openSrtExportDialog() },
+    { action: "toggle_main_top_panel", run: () => toggleTopPanel() },
     { action: "open_language_dialog", run: () => openLanguageDialog() },
     {
       action: "open_encoding_manager",
@@ -859,6 +935,26 @@ function registerMenuListeners() {
     .catch((error) => {
       console.warn("Failed to register bulk state menu listener.", error);
     });
+
+  listen<string>("toggle-main-column-visibility", (event) => {
+    toggleColumnVisibility(event.payload);
+  })
+    .then((unlisten) => {
+      unlistenToggleMainColumnVisibility = unlisten;
+    })
+    .catch((error) => {
+      console.warn("Failed to register column visibility menu listener.", error);
+    });
+
+  listen("toggle-main-top-panel", () => {
+    toggleTopPanel();
+  })
+    .then((unlisten) => {
+      unlistenToggleMainTopPanel = unlisten;
+    })
+    .catch((error) => {
+      console.warn("Failed to register top panel menu listener.", error);
+    });
 }
 
 type MainDialog =
@@ -881,6 +977,7 @@ function openMainDialog(dialog: MainDialog) {
     return false;
   }
 
+  closeSearchOverlay();
   closeMainDialogs();
   if (
     dialog === "excelExport" ||
@@ -943,6 +1040,22 @@ function closeMainDialogs() {
   isGoToRowDialogOpen.value = false;
   isLanguageDialogOpen.value = false;
   isLlmSettingsDialogOpen.value = false;
+}
+
+function hasOpenMainDialog() {
+  return (
+    isAiTranslationDialogOpen.value ||
+    isAiTranslationSessionDialogOpen.value ||
+    isBulkStateDialogOpen.value ||
+    isCharacterStatsDialogOpen.value ||
+    isExcelExportDialogOpen.value ||
+    isExcelImportDialogOpen.value ||
+    isSrtExportDialogOpen.value ||
+    isSrtImportDialogOpen.value ||
+    isGoToRowDialogOpen.value ||
+    isLanguageDialogOpen.value ||
+    isLlmSettingsDialogOpen.value
+  );
 }
 
 function hasActiveMainDialogTask() {
@@ -1069,6 +1182,21 @@ function selectAllAiTranslationResults() {
 }
 
 function applySelectedAiTranslationResults() {
+  applySelectedAiTranslationResultsTo("translated");
+}
+
+function applySelectedAiTranslationResultsToAiOutput() {
+  applySelectedAiTranslationResultsTo("ai_output");
+}
+
+function appendNoteText(existingNote: string, text: string) {
+  const trimmedText = text.trim();
+  if (trimmedText === "") return existingNote;
+  const trimmedExisting = existingNote.trim();
+  return trimmedExisting === "" ? trimmedText : `${existingNote}\n${trimmedText}`;
+}
+
+function applySelectedAiTranslationResultsTo(target: "translated" | "ai_output") {
   const result = aiTranslationSession.value;
   if (!result || selectedAiTranslationTaskIds.value.size === 0) return;
 
@@ -1082,9 +1210,12 @@ function applySelectedAiTranslationResults() {
     const row = nextRows[task.rowIndex];
     if (!row) return task;
 
-    row.translated_text = task.candidateTranslation;
-    if (task.candidateNote.trim() !== "") {
-      row.note = row.note.trim() === "" ? task.candidateNote : `${row.note}\n${task.candidateNote}`;
+    if (target === "translated") {
+      row.translated_text = task.candidateTranslation;
+      row.note = appendNoteText(row.note, task.candidateNote);
+    } else {
+      row.ai_output = appendNoteText(row.ai_output, task.candidateTranslation);
+      row.ai_output = appendNoteText(row.ai_output, task.candidateNote);
     }
     if (updateAiTranslationStateOnApply.value) {
       row.state = "⭕️temp";
@@ -1110,9 +1241,15 @@ function applySelectedAiTranslationResults() {
   };
   selectedAiTranslationTaskIds.value = new Set();
   markStatSnapshotDirty();
-  aiTranslationSessionMessage.value = updateAiTranslationStateOnApply.value
-    ? `${t("ai.appliedResultsAndTemp")}: ${appliedCount}.`
-    : `${t("ai.appliedResults")}: ${appliedCount}.`;
+  const appliedMessage =
+    target === "translated"
+      ? updateAiTranslationStateOnApply.value
+        ? t("ai.appliedResultsAndTemp")
+        : t("ai.appliedResults")
+      : updateAiTranslationStateOnApply.value
+        ? t("ai.appliedResultsToAiOutputAndTemp")
+        : t("ai.appliedResultsToAiOutput");
+  aiTranslationSessionMessage.value = `${appliedMessage}: ${appliedCount}.`;
   statusMessage.value = aiTranslationSessionMessage.value;
   errorMessage.value = "";
 }
@@ -1682,6 +1819,7 @@ function sentenceRowSignature(row: SentenceRow) {
     row.note,
     row.state,
     row.file_name,
+    row.ai_output,
   ]);
 }
 
@@ -1909,6 +2047,10 @@ async function rowsFromExcelImport() {
     excelImportNoteColumn.value,
     "note column",
   );
+  const aiOutputColumn = optionalPositiveInteger(
+    excelImportAiOutputColumn.value,
+    "ai_output column",
+  );
   const stateColumn = optionalPositiveInteger(
     excelImportStateColumn.value,
     "state column",
@@ -1927,6 +2069,7 @@ async function rowsFromExcelImport() {
       const translatedText = excelCellText(cells, translatedColumn);
       const titleAddr = titleColumn ? excelCellText(cells, titleColumn) : "";
       const note = noteColumn ? excelCellText(cells, noteColumn) : "";
+      const aiOutput = aiOutputColumn ? excelCellText(cells, aiOutputColumn) : "";
       const state = stateColumn
         ? normalizeState(excelCellText(cells, stateColumn))
         : "❓unmarked";
@@ -1942,6 +2085,7 @@ async function rowsFromExcelImport() {
         originalText === "" &&
         translatedText === "" &&
         note === "" &&
+        aiOutput === "" &&
         importedFileName === ""
       ) {
         continue;
@@ -1954,6 +2098,7 @@ async function rowsFromExcelImport() {
         note,
         state,
         file_name: importedFileName,
+        ai_output: aiOutput,
       });
     }
   }
@@ -2034,6 +2179,7 @@ function rowsFromSrt(text: string): SentenceRow[] {
           note: "",
           state: "❓unmarked" as StateValue,
           file_name: "",
+          ai_output: "",
         },
       ];
     });
@@ -2528,6 +2674,7 @@ function normalizeSentence(item: unknown): SentenceRow {
     note: toText(sentence.note),
     state: normalizeState(sentence.state),
     file_name: toText(sentence.file_name),
+    ai_output: toText(sentence.ai_output),
   };
 }
 
@@ -2545,6 +2692,7 @@ function normalizeStoredRow(item: unknown): SentenceRow {
     note: toText(row.note),
     state: normalizeState(row.state),
     file_name: toText(row.file_name),
+    ai_output: toText(row.ai_output),
   };
 }
 
@@ -2556,6 +2704,7 @@ function createEmptyRow(): SentenceRow {
     note: "",
     state: "❓unmarked",
     file_name: "",
+    ai_output: "",
   };
 }
 
@@ -2950,6 +3099,7 @@ function serializeRows() {
       note: row.note,
       state: row.state,
       file_name: row.file_name,
+      ai_output: row.ai_output,
     },
   }));
 
@@ -3207,6 +3357,160 @@ function newlineHintParts(value: string) {
   return value.split("\n");
 }
 
+function columnIndexByKey(key: ColumnKey) {
+  return columns.findIndex((column) => column.key === key);
+}
+
+function movableColumn(key: ColumnKey) {
+  return key !== "row_number";
+}
+
+function restoreColumnOrder(): ColumnKey[] {
+  const defaultOrder = columns.map((column) => column.key);
+  try {
+    const rawOrder = window.localStorage.getItem(columnOrderStorageKey);
+    if (!rawOrder) return defaultOrder;
+    const parsed = JSON.parse(rawOrder) as unknown;
+    if (!Array.isArray(parsed)) return defaultOrder;
+
+    const knownKeys = new Set(defaultOrder);
+    const restored = parsed.filter(
+      (key): key is ColumnKey => typeof key === "string" && knownKeys.has(key as ColumnKey),
+    );
+    return [
+      "row_number",
+      ...restored.filter((key) => key !== "row_number"),
+      ...defaultOrder.filter((key) => !restored.includes(key)),
+    ];
+  } catch {
+    window.localStorage.removeItem(columnOrderStorageKey);
+    return defaultOrder;
+  }
+}
+
+function restoreHiddenColumnKeys(): Set<ColumnKey> {
+  try {
+    const rawVisibility = window.localStorage.getItem(columnVisibilityStorageKey);
+    if (!rawVisibility) return new Set();
+    const parsed = JSON.parse(rawVisibility) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return new Set();
+
+    const knownKeys = new Set(columns.map((column) => column.key));
+    const hidden = new Set<ColumnKey>();
+    Object.entries(parsed as Record<string, unknown>).forEach(([key, isVisible]) => {
+      if (key !== "row_number" && knownKeys.has(key as ColumnKey) && isVisible === false) {
+        hidden.add(key as ColumnKey);
+      }
+    });
+    return hidden;
+  } catch {
+    window.localStorage.removeItem(columnVisibilityStorageKey);
+    return new Set();
+  }
+}
+
+function persistColumnOrder() {
+  window.localStorage.setItem(columnOrderStorageKey, JSON.stringify(columnOrder.value));
+}
+
+function persistColumnVisibility() {
+  const visibility = Object.fromEntries(
+    columns
+      .filter((column) => column.key !== "row_number")
+      .map((column) => [column.key, !hiddenColumnKeys.value.has(column.key)]),
+  );
+  window.localStorage.setItem(columnVisibilityStorageKey, JSON.stringify(visibility));
+}
+
+function toggleColumnVisibility(columnKey: string) {
+  if (!columns.some((column) => column.key === columnKey) || columnKey === "row_number") {
+    return;
+  }
+
+  const key = columnKey as ColumnKey;
+  const nextHidden = new Set(hiddenColumnKeys.value);
+  if (nextHidden.has(key)) {
+    nextHidden.delete(key);
+  } else {
+    nextHidden.add(key);
+  }
+  hiddenColumnKeys.value = nextHidden;
+  persistColumnVisibility();
+  syncMainColumnVisibilityMenu();
+  nextTick(() => {
+    updateTableViewport();
+  });
+}
+
+function startColumnReorder(columnKey: ColumnKey, event: PointerEvent) {
+  if (!movableColumn(columnKey)) return;
+  const target = event.target as HTMLElement | null;
+  if (target?.closest("button, input, select, textarea")) return;
+  event.preventDefault();
+  lastColumnPointerX = event.clientX;
+  lastColumnPointerY = event.clientY;
+  activeColumnDragElement = event.currentTarget as HTMLElement | null;
+  window.addEventListener("pointermove", trackColumnPointer);
+  window.addEventListener("pointerup", finishColumnReorder);
+  columnDragTimer = window.setTimeout(() => {
+    draggedColumnKey = columnKey;
+    columnDropTargetKey.value = null;
+    activeColumnDragElement?.classList.add("reordering");
+    document.body.style.userSelect = "none";
+  }, 350);
+}
+
+function trackColumnPointer(event: PointerEvent) {
+  lastColumnPointerX = event.clientX;
+  lastColumnPointerY = event.clientY;
+  if (draggedColumnKey) {
+    event.preventDefault();
+    const targetKey = columnKeyFromPoint(event.clientX, event.clientY);
+    columnDropTargetKey.value =
+      targetKey && targetKey !== draggedColumnKey && movableColumn(targetKey)
+        ? targetKey
+        : null;
+  }
+}
+
+function cancelColumnReorder() {
+  if (columnDragTimer !== undefined) {
+    window.clearTimeout(columnDragTimer);
+    columnDragTimer = undefined;
+  }
+  draggedColumnKey = null;
+  columnDropTargetKey.value = null;
+  activeColumnDragElement?.classList.remove("reordering");
+  activeColumnDragElement = null;
+  document.body.style.userSelect = "";
+  window.removeEventListener("pointermove", trackColumnPointer);
+  window.removeEventListener("pointerup", finishColumnReorder);
+}
+
+function columnKeyFromPoint(x: number, y: number): ColumnKey | null {
+  const element = document
+    .elementFromPoint(x, y)
+    ?.closest<HTMLElement>("[data-column-key]");
+  const key = element?.dataset.columnKey;
+  return columns.some((column) => column.key === key) ? (key as ColumnKey) : null;
+}
+
+function finishColumnReorder(event: PointerEvent) {
+  lastColumnPointerX = event.clientX;
+  lastColumnPointerY = event.clientY;
+  const sourceKey = draggedColumnKey;
+  const targetKey = columnKeyFromPoint(lastColumnPointerX, lastColumnPointerY);
+  cancelColumnReorder();
+  if (!sourceKey || !targetKey || sourceKey === targetKey || !movableColumn(targetKey)) return;
+
+  const nextOrder = columnOrder.value.filter((key) => key !== sourceKey);
+  const targetIndex = nextOrder.indexOf(targetKey);
+  if (targetIndex < 0) return;
+  nextOrder.splice(targetIndex, 0, sourceKey);
+  columnOrder.value = nextOrder;
+  persistColumnOrder();
+}
+
 function columnFontStyle(columnIndex: number) {
   return {
     fontSize: `${columnFontSizes.value[columnIndex]}px`,
@@ -3218,6 +3522,18 @@ function textColumnStyle(columnIndex: number, column: CjkFallbackColumn) {
     ...columnFontStyle(columnIndex),
     fontFamily: cjkFontFamily(cjkFallbackPrefs.value[column]),
   };
+}
+
+function sentenceCellStyle(key: keyof SentenceRow) {
+  const columnIndex = columnIndexByKey(key);
+  if (key === "original_text") return textColumnStyle(columnIndex, "original");
+  if (key === "translated_text") return textColumnStyle(columnIndex, "translated");
+  if (key === "note") return textColumnStyle(columnIndex, "note");
+  return columnFontStyle(columnIndex);
+}
+
+function disablesTextCorrection(key: keyof SentenceRow) {
+  return key === "title_addr" || key === "file_name";
 }
 
 function cjkFontFamily(mode: CjkFallbackMode) {
@@ -3318,6 +3634,7 @@ async function syncNativeChrome() {
   // so apply the window theme before rebuilding localized menus.
   await syncWindowTheme();
   syncAppLanguageMenu(true);
+  syncMainColumnVisibilityMenu();
 }
 
 function syncHistoryMenuState() {
@@ -3326,6 +3643,18 @@ function syncHistoryMenuState() {
     canRedo: canRedoTableChange.value,
   }).catch((error) => {
     console.warn("Failed to sync history menu state.", error);
+  });
+}
+
+function syncMainColumnVisibilityMenu() {
+  const visibility = Object.fromEntries(
+    columns
+      .filter((column) => column.key !== "row_number")
+      .map((column) => [column.key, !hiddenColumnKeys.value.has(column.key)]),
+  );
+
+  invoke("set_main_column_visibility_menu", { visibility }).catch((error) => {
+    console.warn("Failed to sync main column visibility menu.", error);
   });
 }
 
@@ -3480,6 +3809,18 @@ function restoreThemeMode(): ThemeMode {
     : "system";
 }
 
+function restoreTopPanelVisible() {
+  return window.localStorage.getItem(topPanelVisibleStorageKey) !== "false";
+}
+
+function persistTopPanelVisible() {
+  window.localStorage.setItem(topPanelVisibleStorageKey, String(isTopPanelVisible.value));
+}
+
+function toggleTopPanel() {
+  isTopPanelVisible.value = !isTopPanelVisible.value;
+}
+
 function queuePersistColumnWidths() {
   window.clearTimeout(columnWidthSaveTimer);
   columnWidthSaveTimer = window.setTimeout(() => {
@@ -3610,7 +3951,36 @@ function startResize(columnIndex: number, event: PointerEvent) {
 
 <template>
   <main class="app-shell" :class="appShellClasses">
-    <section class="top-panel">
+    <div v-if="!isTopPanelVisible" class="compact-top-bar">
+      <button
+        class="top-panel-toggle"
+        type="button"
+        @click="toggleTopPanel"
+      >
+        {{ t("common.showControls") }}
+      </button>
+      <p class="compact-file-path">
+        {{
+          jsonPath ||
+          (rows.length > 0
+            ? t("main.noJsonSavePath")
+            : t("main.noJsonFileLoaded"))
+        }}
+      </p>
+      <span class="compact-result-count">{{ filteredRows.length }} / {{ rows.length }}</span>
+      <p
+        class="compact-message"
+        :class="{
+          'error-message': errorMessage,
+          'status-message': !errorMessage && displayedMessage,
+          empty: !displayedMessage,
+        }"
+      >
+        {{ displayedMessage || "\u00a0" }}
+      </p>
+    </div>
+
+    <section v-if="isTopPanelVisible" class="top-panel">
       <header class="toolbar">
         <div class="toolbar-actions">
           <div class="toolbar-controls">
@@ -3665,179 +4035,83 @@ function startResize(columnIndex: number, event: PointerEvent) {
           </span>
       </header>
 
-      <div class="search-panel" aria-label="Search filters">
-        <div class="search-summary-row">
-          <div class="filter-group text-search-group">
-            <span class="filter-group-label"></span>
-            <input
-              v-model="searchText"
-              type="search"
-              :placeholder="t('common.searchText')"
-              :aria-label="t('common.searchText')"
-            />
-            <select v-model="textMatchMode" aria-label="Text match mode">
-              <option value="contains">{{ t("match.contains") }}</option>
-              <option value="exact">{{ t("match.exact") }}</option>
-            </select>
-            <label class="checkbox-label case-checkbox">
-              <input v-model="isCaseSensitiveSearch" type="checkbox" />
-              <span>{{ t("main.caseSensitive") }}</span>
-            </label>
-          </div>
-
-          <div class="filter-group length-filter-group">
-            <span class="filter-group-label">{{ t("main.length") }}</span>
-            <select v-model="searchLengthColumn" aria-label="String length column">
-              <option
-                v-for="column in textSearchColumns"
-                :key="column.key"
-                :value="column.key"
-              >
-                {{ column.label }}
-              </option>
-            </select>
-            <input
-              v-model="searchLengthMin"
-              type="text"
-              inputmode="numeric"
-              aria-label="Minimum string length"
-              :placeholder="t('main.min')"
-            />
-            <span class="range-separator">{{ t("main.to") }}</span>
-            <input
-              v-model="searchLengthMax"
-              type="text"
-              inputmode="numeric"
-              aria-label="Maximum string length"
-              :placeholder="t('main.max')"
-            />
-          </div>
-
-
-        </div>
-
-        <div class="search-columns" aria-label="Search columns">
-          <label
-            v-for="column in textSearchColumns"
-            :key="column.key"
-            class="checkbox-label"
-          >
-            <input
-              v-model="selectedSearchColumns"
-              type="checkbox"
-              :value="column.key"
-            />
-            <span>{{ column.label }}</span>
-          </label>
-        </div>
-
-        <div class="stats-panel" aria-label="Status filters">
-          <span class="filter-group-label">{{ t("main.statusFilters") }}</span>
-          <div class="stats-list">
-            <button
-              type="button"
-              :class="{ active: !hasActiveStatFilters() }"
-              @click="clearStatFilters"
-            >
-              {{ t("common.all") }} {{ rowStats.total }}
-            </button>
-            <button
-              v-for="state in stateOptions"
-              :key="state"
-              type="button"
-              :class="{ active: isStatFilterActive({ type: 'state', state }) }"
-              @click="toggleStatFilter({ type: 'state', state })"
-            >
-              {{ state }} {{ rowStats.stateCounts[state] }}
-            </button>
-            <button
-              type="button"
-              :class="{ active: isStatFilterActive({ type: 'empty_translation' }) }"
-              @click="toggleStatFilter({ type: 'empty_translation' })"
-            >
-              {{ t("main.emptyTranslation") }} {{ rowStats.emptyTranslations }}
-            </button>
-            <button
-              type="button"
-              :class="{ active: isStatFilterActive({ type: 'not_translated' }) }"
-              @click="toggleStatFilter({ type: 'not_translated' })"
-            >
-              {{ t("main.originalEqualsTranslated") }} {{ rowStats.notTranslated }}
-            </button>
-            <button
-              type="button"
-              :class="{ active: isStatFilterActive({ type: 'original_equals_translated' }) }"
-              @click="toggleStatFilter({ type: 'original_equals_translated' })"
-            >
-              {{ t("main.originalNotEqualsTranslated") }} {{ rowStats.originalEqualsTranslated }}
-            </button>
-            <button
-              type="button"
-              :class="{ active: isStatFilterActive({ type: 'has_note' }) }"
-              @click="toggleStatFilter({ type: 'has_note' })"
-            >
-              {{ t("main.hasNote") }} {{ rowStats.rowsWithNotes }}
-            </button>
-            <button
-              type="button"
-              :class="{ active: isStatFilterActive({ type: 'duplicate_title_addr' }) }"
-              @click="toggleStatFilter({ type: 'duplicate_title_addr' })"
-            >
-              {{ t("main.duplicateTitleAddr") }} {{ rowStats.duplicateTitleAddresses }}
-            </button>
-          </div>
-
-        </div>
-      </div>
-
-      <div class="message-tools-row">
-        <p
-          class="message-slot"
-          :class="{
-            'error-message': errorMessage,
-            'status-message': !errorMessage && statusMessage,
-            empty: !errorMessage && !statusMessage,
-          }"
-        >
-          {{ displayedMessage || "\u00a0" }}
-        </p>
-        <div class="secondary-actions">
-          <div class="row-range-filter" aria-label="Filter row range">
-            <span>{{ t("main.rows") }}</span>
-            <input
-              v-model="rowFilterStart"
-              type="text"
-              inputmode="numeric"
-              aria-label="Filter from row"
-              :placeholder="t('main.min')"
-            />
-            <span>{{ t("main.to") }}</span>
-            <input
-              v-model="rowFilterEnd"
-              type="text"
-              inputmode="numeric"
-              aria-label="Filter to row"
-              :placeholder="t('main.max')"
-            />
-            <button type="button" :disabled="!hasActiveRowFilter" @click="clearRowFilter">
-              {{ t("common.clear") }}
-            </button>
-          </div>
-          <form class="go-to-row" aria-label="Go to row" @submit.prevent="goToRow">
-            <label for="go-to-row-input">{{ t("main.goToRow") }}</label>
-            <input
-              id="go-to-row-input"
-              v-model="goToRowValue"
-              type="number"
-              min="1"
-              :max="rows.length || undefined"
-              inputmode="numeric"
-            />
-            <button type="submit" :disabled="rows.length === 0">{{ t("main.go") }}</button>
-          </form>
-        </div>
-      </div>
+      <MainSearchControls
+        ref="topSearchControls"
+        v-model:search-text="searchText"
+        v-model:text-match-mode="textMatchMode"
+        v-model:is-case-sensitive-search="isCaseSensitiveSearch"
+        v-model:search-length-column="searchLengthColumn"
+        v-model:search-length-min="searchLengthMin"
+        v-model:search-length-max="searchLengthMax"
+        v-model:selected-search-columns="selectedSearchColumns"
+        v-model:row-filter-start="rowFilterStart"
+        v-model:row-filter-end="rowFilterEnd"
+        v-model:go-to-row-value="goToRowValue"
+        :displayed-message="displayedMessage"
+        :error-message="errorMessage"
+        :filtered-rows-length="filteredRows.length"
+        :go-to-max-row="rows.length"
+        :has-active-row-filter="hasActiveRowFilter"
+        :has-active-stat-filters="hasActiveStatFilters"
+        :is-stat-filter-active="isStatFilterActive"
+        :row-stats="rowStats"
+        :rows-length="rows.length"
+        :state-options="stateOptions"
+        :text-search-columns="textSearchColumns"
+        @clear-row-filter="clearRowFilter"
+        @clear-stat-filters="clearStatFilters"
+        @go-to-row="goToRow"
+        @toggle-stat-filter="toggleStatFilter"
+      />
     </section>
+
+    <div
+      v-if="isSearchOverlayOpen"
+      class="search-overlay-backdrop"
+      role="presentation"
+      @click.self="closeSearchOverlay"
+    >
+      <div class="search-overlay-stack">
+        <button
+          class="search-overlay-close"
+          type="button"
+          :aria-label="t('common.close')"
+          @click="closeSearchOverlay"
+        >
+          ×
+        </button>
+        <section class="search-overlay-panel" role="dialog" aria-modal="true">
+          <MainSearchControls
+            ref="overlaySearchControls"
+            v-model:search-text="searchText"
+            v-model:text-match-mode="textMatchMode"
+            v-model:is-case-sensitive-search="isCaseSensitiveSearch"
+            v-model:search-length-column="searchLengthColumn"
+            v-model:search-length-min="searchLengthMin"
+            v-model:search-length-max="searchLengthMax"
+            v-model:selected-search-columns="selectedSearchColumns"
+            v-model:row-filter-start="rowFilterStart"
+            v-model:row-filter-end="rowFilterEnd"
+            v-model:go-to-row-value="goToRowValue"
+            :displayed-message="displayedMessage"
+            :error-message="errorMessage"
+            :filtered-rows-length="filteredRows.length"
+            :go-to-max-row="rows.length"
+            :has-active-row-filter="hasActiveRowFilter"
+            :has-active-stat-filters="hasActiveStatFilters"
+            :is-stat-filter-active="isStatFilterActive"
+            :row-stats="rowStats"
+            :rows-length="rows.length"
+            :state-options="stateOptions"
+            :text-search-columns="textSearchColumns"
+            @clear-row-filter="clearRowFilter"
+            @clear-stat-filters="clearStatFilters"
+            @go-to-row="goToRow"
+            @toggle-stat-filter="toggleStatFilter"
+          />
+        </section>
+      </div>
+    </div>
 
     <section
       ref="tableWrap"
@@ -3847,13 +4121,18 @@ function startResize(columnIndex: number, event: PointerEvent) {
     >
       <div class="sentence-grid header-row" :style="{ gridTemplateColumns }">
         <div
-          v-for="(column, index) in columns"
+          v-for="column in displayedColumns"
           :key="column.key"
           class="header-cell"
+          :class="{ 'drop-target': columnDropTargetKey === column.key }"
+          :data-column-key="column.key"
         >
-          <div class="header-content">
+          <div
+            class="header-content"
+            @pointerdown="startColumnReorder(column.key, $event)"
+          >
             <span class="header-label">{{ column.label }}</span>
-            <div v-if="index === 0" class="header-row-actions">
+            <div v-if="column.key === 'row_number'" class="header-row-actions">
               <input
                 class="row-select-checkbox"
                 type="checkbox"
@@ -3874,22 +4153,22 @@ function startResize(columnIndex: number, event: PointerEvent) {
                 +
               </button>
               <span class="font-size-readout">
-                {{ columnFontSizes[index] }}px
+                {{ columnFontSizes[columnIndexByKey(column.key)] }}px
               </span>
             </div>
             <div v-else class="font-size-controls">
               <button
                 type="button"
                 :aria-label="`Decrease ${column.label} font size`"
-                @click="adjustColumnFontSize(index, -1)"
+                @click="adjustColumnFontSize(columnIndexByKey(column.key), -1)"
               >
                 -
               </button>
-              <span>{{ columnFontSizes[index] }}px</span>
+              <span>{{ columnFontSizes[columnIndexByKey(column.key)] }}px</span>
               <button
                 type="button"
                 :aria-label="`Increase ${column.label} font size`"
-                @click="adjustColumnFontSize(index, 1)"
+                @click="adjustColumnFontSize(columnIndexByKey(column.key), 1)"
               >
                 +
               </button>
@@ -3950,7 +4229,7 @@ function startResize(columnIndex: number, event: PointerEvent) {
             class="resize-handle"
             type="button"
             :aria-label="`Resize ${column.label}`"
-            @pointerdown="startResize(index, $event)"
+            @pointerdown="startResize(columnIndexByKey(column.key), $event)"
           />
         </div>
         <div class="header-cell table-end-spacer" aria-hidden="true" />
@@ -3976,216 +4255,111 @@ function startResize(columnIndex: number, event: PointerEvent) {
           class="sentence-grid data-row"
           :style="{ gridTemplateColumns }"
         >
-          <div class="row-number-cell" :style="columnFontStyle(0)">
-            <input
-              class="row-select-checkbox"
-              type="checkbox"
-              :aria-label="`Select row ${rowIndex + 1}`"
-              :checked="selectedRowIds.has(getRowIdentity(row))"
-              @change="handleRowSelectionChange(row, $event)"
-            />
-            <div class="row-actions">
-              <template v-if="pendingDeleteIndex === rowIndex">
-                <button
-                  class="row-action-btn cancel-delete-btn"
-                  type="button"
-                  aria-label="Cancel delete row"
-                  @click="cancelDeleteRow"
-                >
-                  X
-                </button>
-                <button
-                  class="row-action-btn confirm-delete-btn"
-                  type="button"
-                  aria-label="Confirm delete row"
-                  @click="confirmDeleteRow(rowIndex)"
-                >
-                  O
-                </button>
-              </template>
-              <template v-else>
-                <button
-                  class="row-action-btn add-row-btn"
-                  type="button"
-                  aria-label="Add row below"
-                  @click="addRowAfter(rowIndex)"
-                >
-                  +
-                </button>
-                <button
-                  class="row-action-btn request-delete-btn"
-                  type="button"
-                  aria-label="Delete row"
-                  @click="requestDeleteRow(rowIndex)"
-                >
-                  ×
-                </button>
-              </template>
-            </div>
-            <span class="row-number">{{ rowIndex + 1 }}</span>
-          </div>
-          <div class="textarea-cell" :style="columnFontStyle(1)">
-            <textarea
-              v-model="row.title_addr"
-              aria-label="title_addr"
-              @focus="beginTableEdit"
-              @input="markStatSnapshotDirty"
-              @blur="commitTableEdit"
-            />
-            <div class="newline-hints" aria-hidden="true">
-              <template
-                v-for="(line, lineIndex) in newlineHintParts(row.title_addr)"
-                :key="lineIndex"
-              >
-                <span>{{ line || " " }}</span>
-                <span
-                  v-if="lineIndex < newlineHintParts(row.title_addr).length - 1"
-                  class="newline-marker"
-                >
-                  ↵
-                </span>
-                <br
-                  v-if="lineIndex < newlineHintParts(row.title_addr).length - 1"
-                />
-              </template>
-            </div>
-            <div class="textarea-measure">{{ row.title_addr || " " }}</div>
-          </div>
-          <div class="textarea-cell" :style="textColumnStyle(2, 'original')">
-            <textarea
-              v-model="row.original_text"
-              aria-label="original_text"
-              @focus="beginTableEdit"
-              @input="markStatSnapshotDirty"
-              @blur="commitTableEdit"
-            />
-            <div class="newline-hints" aria-hidden="true">
-              <template
-                v-for="(line, lineIndex) in newlineHintParts(row.original_text)"
-                :key="lineIndex"
-              >
-                <span>{{ line || " " }}</span>
-                <span
-                  v-if="
-                    lineIndex < newlineHintParts(row.original_text).length - 1
-                  "
-                  class="newline-marker"
-                >
-                  ↵
-                </span>
-                <br
-                  v-if="
-                    lineIndex < newlineHintParts(row.original_text).length - 1
-                  "
-                />
-              </template>
-            </div>
-            <div class="textarea-measure">{{ row.original_text || " " }}</div>
-          </div>
-          <div class="textarea-cell" :style="textColumnStyle(3, 'translated')">
-            <textarea
-              v-model="row.translated_text"
-              aria-label="translated_text"
-              @focus="beginTableEdit"
-              @input="markStatSnapshotDirty"
-              @blur="commitTableEdit"
-            />
-            <div class="newline-hints" aria-hidden="true">
-              <template
-                v-for="(line, lineIndex) in newlineHintParts(
-                  row.translated_text,
-                )"
-                :key="lineIndex"
-              >
-                <span>{{ line || " " }}</span>
-                <span
-                  v-if="
-                    lineIndex <
-                    newlineHintParts(row.translated_text).length - 1
-                  "
-                  class="newline-marker"
-                >
-                  ↵
-                </span>
-                <br
-                  v-if="
-                    lineIndex <
-                    newlineHintParts(row.translated_text).length - 1
-                  "
-                />
-              </template>
-            </div>
-            <div class="textarea-measure">
-              {{ row.translated_text || " " }}
-            </div>
-          </div>
-          <div class="textarea-cell" :style="textColumnStyle(4, 'note')">
-            <textarea
-              v-model="row.note"
-              aria-label="note"
-              @focus="beginTableEdit"
-              @input="markStatSnapshotDirty"
-              @blur="commitTableEdit"
-            />
-            <div class="newline-hints" aria-hidden="true">
-              <template
-                v-for="(line, lineIndex) in newlineHintParts(row.note)"
-                :key="lineIndex"
-              >
-                <span>{{ line || " " }}</span>
-                <span
-                  v-if="lineIndex < newlineHintParts(row.note).length - 1"
-                  class="newline-marker"
-                >
-                  ↵
-                </span>
-                <br
-                  v-if="lineIndex < newlineHintParts(row.note).length - 1"
-                />
-              </template>
-            </div>
-            <div class="textarea-measure">{{ row.note || " " }}</div>
-          </div>
-          <div class="select-cell" :style="columnFontStyle(5)">
-            <select
-              v-model="row.state"
-              aria-label="state"
-              @focus="beginTableEdit"
-              @change="commitSelectEdit"
-              @blur="commitTableEdit"
+          <template v-for="column in displayedColumns" :key="column.key">
+            <div
+              v-if="column.key === 'row_number'"
+              class="row-number-cell"
+              :style="columnFontStyle(columnIndexByKey(column.key))"
             >
-              <option v-for="state in stateOptions" :key="state" :value="state">
-                {{ state }}
-              </option>
-            </select>
-          </div>
-          <div class="textarea-cell" :style="columnFontStyle(6)">
-            <textarea
-              v-model="row.file_name"
-              aria-label="file_name"
-              @focus="beginTableEdit"
-              @input="markStatSnapshotDirty"
-              @blur="commitTableEdit"
-            />
-            <div class="newline-hints" aria-hidden="true">
-              <template
-                v-for="(line, lineIndex) in newlineHintParts(row.file_name)"
-                :key="lineIndex"
-              >
-                <span>{{ line || " " }}</span>
-                <span
-                  v-if="lineIndex < newlineHintParts(row.file_name).length - 1"
-                  class="newline-marker"
-                >
-                  ↵
-                </span>
-                <br
-                  v-if="lineIndex < newlineHintParts(row.file_name).length - 1"
-                />
-              </template>
+              <input
+                class="row-select-checkbox"
+                type="checkbox"
+                :aria-label="`Select row ${rowIndex + 1}`"
+                :checked="selectedRowIds.has(getRowIdentity(row))"
+                @change="handleRowSelectionChange(row, $event)"
+              />
+              <div class="row-actions">
+                <template v-if="pendingDeleteIndex === rowIndex">
+                  <button
+                    class="row-action-btn cancel-delete-btn"
+                    type="button"
+                    aria-label="Cancel delete row"
+                    @click="cancelDeleteRow"
+                  >
+                    X
+                  </button>
+                  <button
+                    class="row-action-btn confirm-delete-btn"
+                    type="button"
+                    aria-label="Confirm delete row"
+                    @click="confirmDeleteRow(rowIndex)"
+                  >
+                    O
+                  </button>
+                </template>
+                <template v-else>
+                  <button
+                    class="row-action-btn add-row-btn"
+                    type="button"
+                    aria-label="Add row below"
+                    @click="addRowAfter(rowIndex)"
+                  >
+                    +
+                  </button>
+                  <button
+                    class="row-action-btn request-delete-btn"
+                    type="button"
+                    aria-label="Delete row"
+                    @click="requestDeleteRow(rowIndex)"
+                  >
+                    ×
+                  </button>
+                </template>
+              </div>
+              <span class="row-number">{{ rowIndex + 1 }}</span>
             </div>
-            <div class="textarea-measure">{{ row.file_name || " " }}</div>
-          </div>
+            <div
+              v-else-if="column.key === 'state'"
+              class="select-cell"
+              :style="columnFontStyle(columnIndexByKey(column.key))"
+            >
+              <select
+                v-model="row.state"
+                aria-label="state"
+                @focus="beginTableEdit"
+                @change="commitSelectEdit"
+                @blur="commitTableEdit"
+              >
+                <option v-for="state in stateOptions" :key="state" :value="state">
+                  {{ state }}
+                </option>
+              </select>
+            </div>
+            <div
+              v-else
+              class="textarea-cell"
+              :style="sentenceCellStyle(column.key)"
+            >
+              <textarea
+                v-model="row[column.key]"
+                :aria-label="column.key"
+                :autocapitalize="disablesTextCorrection(column.key) ? 'off' : undefined"
+                :autocorrect="disablesTextCorrection(column.key) ? 'off' : undefined"
+                :spellcheck="disablesTextCorrection(column.key) ? false : undefined"
+                @focus="beginTableEdit"
+                @input="markStatSnapshotDirty"
+                @blur="commitTableEdit"
+              />
+              <div class="newline-hints" aria-hidden="true">
+                <template
+                  v-for="(line, lineIndex) in newlineHintParts(row[column.key])"
+                  :key="lineIndex"
+                >
+                  <span>{{ line || " " }}</span>
+                  <span
+                    v-if="lineIndex < newlineHintParts(row[column.key]).length - 1"
+                    class="newline-marker"
+                  >
+                    ↵
+                  </span>
+                  <br
+                    v-if="lineIndex < newlineHintParts(row[column.key]).length - 1"
+                  />
+                </template>
+              </div>
+              <div class="textarea-measure">{{ row[column.key] || " " }}</div>
+            </div>
+          </template>
           <div class="table-end-spacer" aria-hidden="true" />
         </div>
         <div
@@ -4287,6 +4461,7 @@ function startResize(columnIndex: number, event: PointerEvent) {
       :session="aiTranslationSession"
       :update-state-on-apply="updateAiTranslationStateOnApply"
       @apply-selected="applySelectedAiTranslationResults"
+      @apply-selected-to-ai-output="applySelectedAiTranslationResultsToAiOutput"
       @close="closeAiTranslationSessionDialog"
       @discard="discardAiTranslationSession"
       @select-all="selectAllAiTranslationResults"
@@ -4311,6 +4486,7 @@ function startResize(columnIndex: number, event: PointerEvent) {
       v-model:original-column="excelImportOriginalColumn"
       v-model:translated-column="excelImportTranslatedColumn"
       v-model:note-column="excelImportNoteColumn"
+      v-model:ai-output-column="excelImportAiOutputColumn"
       v-model:state-column="excelImportStateColumn"
       v-model:file-name-mode="excelImportFileNameMode"
       v-model:file-name-column="excelImportFileNameColumn"
@@ -4443,6 +4619,132 @@ button {
   padding: 10px;
   color: var(--text);
   background: var(--page-bg);
+}
+
+.app-shell.top-panel-hidden {
+  gap: 6px;
+  padding-top: 6px;
+}
+
+.app-shell .compact-top-bar {
+  display: grid;
+  grid-template-columns: max-content minmax(120px, 1fr) max-content minmax(120px, 0.8fr);
+  gap: 8px;
+  align-items: center;
+  min-height: 28px;
+  min-width: 0;
+}
+
+.app-shell .top-panel-toggle {
+  align-self: flex-end;
+  min-height: 24px;
+  border: 1px solid var(--control-border);
+  border-radius: 6px;
+  padding: 3px 8px;
+  color: var(--control-text);
+  background: var(--panel-bg);
+  font-size: 11px;
+  font-weight: 650;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.app-shell .top-panel-toggle:hover {
+  border-color: var(--primary);
+  color: var(--primary);
+  background: var(--control-hover-bg);
+}
+
+.app-shell .compact-file-path,
+.app-shell .compact-message {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.app-shell .compact-file-path,
+.app-shell .compact-result-count {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.app-shell .compact-result-count {
+  white-space: nowrap;
+}
+
+.app-shell .compact-message {
+  min-height: 24px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  padding: 3px 7px;
+  font-size: 11px;
+  line-height: 1.25;
+}
+
+.app-shell .compact-message.empty {
+  border-color: var(--info-border);
+  color: transparent;
+  background: var(--info-bg);
+}
+
+.app-shell .search-overlay-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 35;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: rgb(15 23 42 / 45%);
+}
+
+.app-shell .search-overlay-stack {
+  display: grid;
+  width: min(1120px, 100%);
+  max-height: calc(100vh - 24px);
+  gap: 8px;
+}
+
+.app-shell .search-overlay-panel {
+  position: relative;
+  max-height: calc(100vh - 60px);
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px 12px;
+  color: var(--text);
+  background: var(--panel-bg);
+  box-shadow: 0 18px 45px rgb(15 23 42 / 24%);
+}
+
+.app-shell.theme-dark .search-overlay-panel {
+  border-color: #475569;
+  background: #111827;
+  box-shadow: 0 18px 60px rgb(0 0 0 / 42%);
+}
+
+.app-shell .search-overlay-close {
+  justify-self: end;
+  width: 24px;
+  height: 24px;
+  border: 1px solid var(--control-border);
+  border-radius: 6px;
+  color: var(--control-text);
+  background: var(--panel-bg);
+  font-size: 16px;
+  line-height: 1;
+}
+
+.app-shell .search-overlay-close:hover {
+  border-color: var(--danger);
+  color: var(--danger);
+  background: var(--danger-bg-soft);
+}
+
+.app-shell .search-overlay-panel .search-panel {
+  padding-right: 28px;
 }
 
 .theme-dark {
@@ -5135,6 +5437,26 @@ button {
   flex-direction: column;
   justify-content: center;
   gap: 5px;
+  cursor: grab;
+}
+
+.header-content:active {
+  cursor: grabbing;
+}
+
+.header-content.reordering {
+  outline: 2px solid var(--primary);
+  outline-offset: -2px;
+  border-radius: 6px;
+  color: var(--text);
+  background: color-mix(in srgb, var(--primary) 20%, var(--header-bg));
+  box-shadow: inset 0 0 0 1px var(--primary);
+}
+
+.header-cell.drop-target {
+  color: var(--text);
+  background: color-mix(in srgb, var(--success) 18%, var(--header-bg));
+  box-shadow: inset 0 0 0 2px var(--success);
 }
 
 .header-label {

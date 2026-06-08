@@ -1,9 +1,9 @@
-use std::{fs, path::PathBuf, sync::Mutex, time::Duration};
+use std::{collections::HashMap, fs, path::PathBuf, sync::Mutex, time::Duration};
 
 use keyring::Entry;
 use serde::{Deserialize, Serialize};
 use tauri::{
-    menu::{Menu, MenuItemBuilder, MenuItemKind, SubmenuBuilder},
+    menu::{CheckMenuItemBuilder, Menu, MenuItemBuilder, MenuItemKind, SubmenuBuilder},
     utils::config::WebviewUrl,
     AppHandle, Emitter, Manager, Runtime, State, WebviewWindowBuilder, WindowEvent,
 };
@@ -19,6 +19,14 @@ const IMPORT_EXCEL_MENU_ID: &str = "import_excel";
 const EXPORT_EXCEL_MENU_ID: &str = "export_excel";
 const IMPORT_SRT_MENU_ID: &str = "import_srt";
 const EXPORT_SRT_MENU_ID: &str = "export_srt";
+const TOGGLE_MAIN_TOP_PANEL_MENU_ID: &str = "toggle_main_top_panel";
+const VIEW_COLUMN_TITLE_ADDR_MENU_ID: &str = "view_column_title_addr";
+const VIEW_COLUMN_ORIGINAL_TEXT_MENU_ID: &str = "view_column_original_text";
+const VIEW_COLUMN_TRANSLATED_TEXT_MENU_ID: &str = "view_column_translated_text";
+const VIEW_COLUMN_NOTE_MENU_ID: &str = "view_column_note";
+const VIEW_COLUMN_STATE_MENU_ID: &str = "view_column_state";
+const VIEW_COLUMN_FILE_NAME_MENU_ID: &str = "view_column_file_name";
+const VIEW_COLUMN_AI_OUTPUT_MENU_ID: &str = "view_column_ai_output";
 const OPEN_LANGUAGE_DIALOG_MENU_ID: &str = "open_language_dialog";
 const LANGUAGE_EN_MENU_ID: &str = "language_en";
 const LANGUAGE_ZH_HANS_MENU_ID: &str = "language_zh_hans";
@@ -44,6 +52,7 @@ const ENCODING_LINE_LENGTH_MENU_ID: &str = "encoding_line_length";
 const ENCODING_GO_TO_ROW_MENU_ID: &str = "encoding_go_to_row";
 const ENCODING_CLEAR_LIST_MENU_ID: &str = "encoding_clear_list";
 const ENCODING_DELETE_SELECTED_MENU_ID: &str = "encoding_delete_selected";
+const ENCODING_TOGGLE_TOP_PANEL_MENU_ID: &str = "encoding_toggle_top_panel";
 const LLM_API_KEY_SERVICE: &str = "txtmgr.llm";
 const LLM_API_KEY_ACCOUNT: &str = "default_api_key";
 
@@ -120,6 +129,7 @@ struct NativeMenuState {
     main_language: Option<String>,
     encoding_language: Option<String>,
     encoding_event_registered: bool,
+    main_column_visibility: Option<HashMap<String, bool>>,
 }
 
 type NativeMenuStateStore = Mutex<NativeMenuState>;
@@ -612,19 +622,27 @@ fn set_app_language_menu(
     let force_rebuild = force_rebuild.unwrap_or(false);
     #[cfg(target_os = "macos")]
     let _ = force_rebuild;
-    #[cfg(target_os = "macos")]
-    let _ = &menu_state;
 
     #[cfg(target_os = "macos")]
     {
         // macOS has one app menu bar, so it must be rebuilt for whichever
         // window is active. Windows/Linux attach menus to each window.
+        let mut state = menu_state
+            .lock()
+            .map_err(|_| "Failed to lock native menu state.".to_string())?;
         if encoding_is_focused {
+            state.encoding_language = Some(language.to_string());
             let menu =
                 build_encoding_menu_for(&app, language).map_err(|error| error.to_string())?;
             app.set_menu(menu).map_err(|error| error.to_string())?;
         } else {
-            let menu = build_main_menu_for(&app, language).map_err(|error| error.to_string())?;
+            state.main_language = Some(language.to_string());
+            let menu = build_main_menu_for_with_columns(
+                &app,
+                language,
+                state.main_column_visibility.as_ref(),
+            )
+            .map_err(|error| error.to_string())?;
             app.set_menu(menu).map_err(|error| error.to_string())?;
         }
         return Ok(());
@@ -644,12 +662,67 @@ fn set_app_language_menu(
                 return Ok(());
             }
 
-            let menu = build_main_menu_for(&app, language).map_err(|error| error.to_string())?;
+            let menu = build_main_menu_for_with_columns(
+                &app,
+                language,
+                state.main_column_visibility.as_ref(),
+            )
+            .map_err(|error| error.to_string())?;
             window.set_menu(menu).map_err(|error| error.to_string())?;
             state.main_language = Some(language.to_string());
         }
         return Ok(());
     }
+}
+
+#[tauri::command]
+fn set_main_column_visibility_menu(
+    app: AppHandle,
+    menu_state: State<NativeMenuStateStore>,
+    visibility: HashMap<String, bool>,
+) -> Result<(), String> {
+    let normalized_visibility = normalize_main_column_visibility(visibility);
+    let encoding_is_focused = app
+        .get_webview_window("encoding")
+        .and_then(|window| window.is_focused().ok())
+        .unwrap_or(false);
+
+    let (language, column_visibility) = {
+        let mut state = menu_state
+            .lock()
+            .map_err(|_| "Failed to lock native menu state.".to_string())?;
+        state.main_column_visibility = Some(normalized_visibility);
+        (
+            state
+                .main_language
+                .clone()
+                .unwrap_or_else(|| "en".to_string()),
+            state.main_column_visibility.clone(),
+        )
+    };
+
+    #[cfg(target_os = "macos")]
+    {
+        if !encoding_is_focused {
+            let menu =
+                build_main_menu_for_with_columns(&app, &language, column_visibility.as_ref())
+                    .map_err(|error| error.to_string())?;
+            app.set_menu(menu).map_err(|error| error.to_string())?;
+        }
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = encoding_is_focused;
+        if let Some(window) = app.get_webview_window("main") {
+            let menu =
+                build_main_menu_for_with_columns(&app, &language, column_visibility.as_ref())
+                    .map_err(|error| error.to_string())?;
+            window.set_menu(menu).map_err(|error| error.to_string())?;
+        }
+    }
+
+    Ok(())
 }
 
 fn normalize_app_language(language: &str) -> &'static str {
@@ -660,6 +733,57 @@ fn normalize_app_language(language: &str) -> &'static str {
     }
 }
 
+fn main_column_menu_items() -> [(&'static str, &'static str, &'static str); 7] {
+    [
+        (
+            VIEW_COLUMN_TITLE_ADDR_MENU_ID,
+            "title_addr",
+            "column_title_addr",
+        ),
+        (
+            VIEW_COLUMN_ORIGINAL_TEXT_MENU_ID,
+            "original_text",
+            "column_original_text",
+        ),
+        (
+            VIEW_COLUMN_TRANSLATED_TEXT_MENU_ID,
+            "translated_text",
+            "column_translated_text",
+        ),
+        (VIEW_COLUMN_NOTE_MENU_ID, "note", "column_note"),
+        (VIEW_COLUMN_STATE_MENU_ID, "state", "column_state"),
+        (
+            VIEW_COLUMN_FILE_NAME_MENU_ID,
+            "file_name",
+            "column_file_name",
+        ),
+        (
+            VIEW_COLUMN_AI_OUTPUT_MENU_ID,
+            "ai_output",
+            "column_ai_output",
+        ),
+    ]
+}
+
+fn normalize_main_column_visibility(visibility: HashMap<String, bool>) -> HashMap<String, bool> {
+    let known_columns = main_column_menu_items();
+    known_columns
+        .iter()
+        .map(|(_, column_key, _)| {
+            (
+                column_key.to_string(),
+                visibility.get(*column_key).copied().unwrap_or(true),
+            )
+        })
+        .collect()
+}
+
+fn main_column_visible(visibility: Option<&HashMap<String, bool>>, column_key: &str) -> bool {
+    visibility
+        .and_then(|visibility| visibility.get(column_key).copied())
+        .unwrap_or(true)
+}
+
 fn menu_label(language: &str, key: &str) -> &'static str {
     let zh = language == "zh-Hans";
     match key {
@@ -668,6 +792,20 @@ fn menu_label(language: &str, key: &str) -> &'static str {
                 "文件"
             } else {
                 "File"
+            }
+        }
+        "view" => {
+            if zh {
+                "显示"
+            } else {
+                "View"
+            }
+        }
+        "toggle_top_panel" => {
+            if zh {
+                "显示/隐藏控制区"
+            } else {
+                "Show/Hide Controls"
             }
         }
         "tools" => {
@@ -838,6 +976,13 @@ fn menu_label(language: &str, key: &str) -> &'static str {
                 "Line Length Check..."
             }
         }
+        "column_title_addr" => "title_addr",
+        "column_original_text" => "original_text",
+        "column_translated_text" => "translated_text",
+        "column_note" => "note",
+        "column_state" => "state",
+        "column_file_name" => "file_name",
+        "column_ai_output" => "ai_output",
         _ => "",
     }
 }
@@ -848,6 +993,19 @@ fn build_encoding_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>>
 }
 
 fn build_main_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
+    build_main_menu_for(app, "en")
+}
+
+fn build_main_menu_from_state<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
+    if let Ok(state) = app.state::<NativeMenuStateStore>().lock() {
+        let language = state.main_language.as_deref().unwrap_or("en");
+        return build_main_menu_for_with_columns(
+            app,
+            language,
+            state.main_column_visibility.as_ref(),
+        );
+    }
+
     build_main_menu_for(app, "en")
 }
 
@@ -950,6 +1108,13 @@ fn build_encoding_menu_for<R: Runtime>(
     .accelerator(shortcut_accelerator(ENCODING_OPEN_LANGUAGE_DIALOG_MENU_ID))
     .build(app)?;
 
+    let toggle_top_panel = MenuItemBuilder::with_id(
+        ENCODING_TOGGLE_TOP_PANEL_MENU_ID,
+        menu_label(language, "toggle_top_panel"),
+    )
+    .accelerator(shortcut_accelerator(ENCODING_TOGGLE_TOP_PANEL_MENU_ID))
+    .build(app)?;
+
     let file_menu = SubmenuBuilder::new(app, menu_label(language, "file"))
         .item(&read_json)
         .item(&save_json)
@@ -967,6 +1132,10 @@ fn build_encoding_menu_for<R: Runtime>(
         .item(&delete_selected)
         .build()?;
 
+    let view_menu = SubmenuBuilder::new(app, menu_label(language, "view"))
+        .item(&toggle_top_panel)
+        .build()?;
+
     let statistics_menu = SubmenuBuilder::new(app, menu_label(language, "statistics"))
         .item(&unmapped_characters)
         .item(&unused_encodings)
@@ -975,12 +1144,21 @@ fn build_encoding_menu_for<R: Runtime>(
 
     let menu = Menu::default(app)?;
     menu.append(&file_menu)?;
+    menu.append(&view_menu)?;
     menu.append(&tools_menu)?;
     menu.append(&statistics_menu)?;
     Ok(menu)
 }
 
 fn build_main_menu_for<R: Runtime>(app: &AppHandle<R>, language: &str) -> tauri::Result<Menu<R>> {
+    build_main_menu_for_with_columns(app, language, None)
+}
+
+fn build_main_menu_for_with_columns<R: Runtime>(
+    app: &AppHandle<R>,
+    language: &str,
+    column_visibility: Option<&HashMap<String, bool>>,
+) -> tauri::Result<Menu<R>> {
     let language = normalize_app_language(language);
     let read_json = MenuItemBuilder::with_id(READ_JSON_MENU_ID, menu_label(language, "read_json"))
         .accelerator(shortcut_accelerator(READ_JSON_MENU_ID))
@@ -1073,6 +1251,22 @@ fn build_main_menu_for<R: Runtime>(app: &AppHandle<R>, language: &str) -> tauri:
     .accelerator(shortcut_accelerator(OPEN_LANGUAGE_DIALOG_MENU_ID))
     .build(app)?;
 
+    let toggle_top_panel = MenuItemBuilder::with_id(
+        TOGGLE_MAIN_TOP_PANEL_MENU_ID,
+        menu_label(language, "toggle_top_panel"),
+    )
+    .accelerator(shortcut_accelerator(TOGGLE_MAIN_TOP_PANEL_MENU_ID))
+    .build(app)?;
+
+    let view_column_items = main_column_menu_items()
+        .into_iter()
+        .map(|(menu_id, column_key, label_key)| {
+            CheckMenuItemBuilder::with_id(menu_id, menu_label(language, label_key))
+                .checked(main_column_visible(column_visibility, column_key))
+                .build(app)
+        })
+        .collect::<tauri::Result<Vec<_>>>()?;
+
     let tools_menu = SubmenuBuilder::new(app, menu_label(language, "tools"))
         .item(&go_to_row)
         .item(&language_dialog)
@@ -1098,8 +1292,16 @@ fn build_main_menu_for<R: Runtime>(app: &AppHandle<R>, language: &str) -> tauri:
         .item(&export_srt)
         .build()?;
 
+    let view_menu = SubmenuBuilder::new(app, menu_label(language, "view"))
+        .item(&toggle_top_panel)
+        .build()?;
+    for item in &view_column_items {
+        view_menu.append(item)?;
+    }
+
     let menu = Menu::default(app)?;
     menu.append(&file_menu)?;
+    menu.append(&view_menu)?;
     menu.append(&tools_menu)?;
     menu.append(&statistics_menu)?;
     Ok(menu)
@@ -1174,7 +1376,7 @@ fn attach_encoding_manager_menu(
 
 #[cfg(target_os = "macos")]
 fn set_main_menu<R: Runtime>(app: &AppHandle<R>) {
-    if let Ok(menu) = build_main_menu(app) {
+    if let Ok(menu) = build_main_menu_from_state(app) {
         let _ = app.set_menu(menu);
     }
 }
@@ -1214,6 +1416,9 @@ fn emit_encoding_menu_event<R: Runtime>(app: &AppHandle<R>, menu_id: &str) {
         ENCODING_GO_TO_ROW_MENU_ID => {
             let _ = app.emit_to("encoding", "encoding-open-go-to-row", ());
         }
+        ENCODING_TOGGLE_TOP_PANEL_MENU_ID => {
+            let _ = app.emit_to("encoding", "encoding-toggle-top-panel", ());
+        }
         ENCODING_CLEAR_LIST_MENU_ID => {
             let _ = app.emit_to("encoding", "encoding-clear-list", ());
         }
@@ -1251,6 +1456,14 @@ fn emit_encoding_menu_event<R: Runtime>(app: &AppHandle<R>, menu_id: &str) {
 }
 
 fn emit_main_menu_event<R: Runtime>(app: &AppHandle<R>, menu_id: &str) {
+    if let Some((_, column_key, _)) = main_column_menu_items()
+        .into_iter()
+        .find(|(column_menu_id, _, _)| *column_menu_id == menu_id)
+    {
+        let _ = app.emit_to("main", "toggle-main-column-visibility", column_key);
+        return;
+    }
+
     match menu_id {
         GO_TO_ROW_MENU_ID => {
             let _ = app.emit_to("main", "open-go-to-row", ());
@@ -1284,6 +1497,9 @@ fn emit_main_menu_event<R: Runtime>(app: &AppHandle<R>, menu_id: &str) {
         }
         EXPORT_SRT_MENU_ID => {
             let _ = app.emit_to("main", "export-srt", ());
+        }
+        TOGGLE_MAIN_TOP_PANEL_MENU_ID => {
+            let _ = app.emit_to("main", "toggle-main-top-panel", ());
         }
         OPEN_LANGUAGE_DIALOG_MENU_ID => {
             let _ = app.emit_to("main", "open-main-language-dialog", ());
@@ -1430,6 +1646,7 @@ pub fn run() {
                             | ENCODING_EXPORT_MENU_ID
                             | ENCODING_EXPORT_EXCEL_MENU_ID
                             | ENCODING_GO_TO_ROW_MENU_ID
+                            | ENCODING_TOGGLE_TOP_PANEL_MENU_ID
                             | ENCODING_CLEAR_LIST_MENU_ID
                             | ENCODING_DELETE_SELECTED_MENU_ID
                             | ENCODING_UNMAPPED_CHARACTERS_MENU_ID
@@ -1471,6 +1688,7 @@ pub fn run() {
             set_app_language_menu,
             set_sentence_coverage_source,
             set_history_menu_enabled,
+            set_main_column_visibility_menu,
             test_llm_connection,
             translate_with_llm,
             write_app_draft

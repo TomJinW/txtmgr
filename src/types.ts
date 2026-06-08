@@ -17,6 +17,7 @@ export type SentenceRow = {
   note: string;
   state: StateValue;
   file_name: string;
+  ai_output: string;
 };
 
 // EncodingRow is intentionally small: export-to-TBL only uses char/code, while
@@ -53,7 +54,8 @@ export type TextSearchKey =
   | "original_text"
   | "translated_text"
   | "note"
-  | "file_name";
+  | "file_name"
+  | "ai_output";
 
 export type ThemeMode = "system" | "light" | "dark";
 export type TextMatchMode = "contains" | "exact";

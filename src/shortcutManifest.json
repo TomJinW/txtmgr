@@ -10,6 +10,8 @@
   "export_excel": { "mac": "Cmd+Option+E", "other": "Ctrl+Alt+E" },
   "import_srt": { "mac": "Cmd+Option+I", "other": "Ctrl+Alt+I" },
   "export_srt": { "mac": "Cmd+Option+R", "other": "Ctrl+Alt+R" },
+  "toggle_main_top_panel": { "mac": "Cmd+E", "other": "Ctrl+E" },
+  "open_search_panel": { "mac": "Cmd+F", "other": "Ctrl+F" },
   "open_language_dialog": { "mac": "Cmd+Option+K", "other": "Ctrl+Alt+K" },
   "language_en": { "mac": "Cmd+Option+1", "other": "Ctrl+Alt+1" },
   "language_zh_hans": { "mac": "Cmd+Option+2", "other": "Ctrl+Alt+2" },
@@ -30,6 +32,8 @@
   "encoding_go_to_row": { "mac": "Cmd+G", "other": "Ctrl+G" },
   "encoding_clear_list": { "mac": "Cmd+Shift+Backspace", "other": "Ctrl+Shift+Delete" },
   "encoding_delete_selected": { "mac": "Cmd+Backspace", "other": "Ctrl+Delete" },
+  "encoding_toggle_top_panel": { "mac": "Cmd+E", "other": "Ctrl+E" },
+  "encoding_open_search_panel": { "mac": "Cmd+F", "other": "Ctrl+F" },
   "encoding_open_language_dialog": { "mac": "Cmd+Option+K", "other": "Ctrl+Alt+K" },
   "encoding_language_en": { "mac": "Cmd+Option+1", "other": "Ctrl+Alt+1" },
   "encoding_language_zh_hans": { "mac": "Cmd+Option+2", "other": "Ctrl+Alt+2" }

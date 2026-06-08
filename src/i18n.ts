@@ -29,6 +29,8 @@ type TranslationKey =
   | "common.save"
   | "common.saving"
   | "common.searchText"
+  | "common.hideControls"
+  | "common.showControls"
   | "common.selected"
   | "common.theme"
   | "menu.file"
@@ -230,6 +232,7 @@ type TranslationKey =
   | "ai.translatedPreview"
   | "ai.selectAll"
   | "ai.applySelected"
+  | "ai.applySelectedToAiOutput"
   | "ai.discardResult"
   | "ai.candidate"
   | "ai.status"
@@ -241,7 +244,9 @@ type TranslationKey =
   | "ai.appliedToTable"
   | "ai.noSelectedResultsApplied"
   | "ai.appliedResults"
+  | "ai.appliedResultsToAiOutput"
   | "ai.appliedResultsAndTemp"
+  | "ai.appliedResultsToAiOutputAndTemp"
   | "ai.discardResultConfirm"
   | "ai.discardResultTitle"
   | "ai.noResultExists"
@@ -391,6 +396,8 @@ const translations: Record<AppLanguage, Record<TranslationKey, string>> = {
     "common.save": "Save",
     "common.saving": "Saving...",
     "common.searchText": "Search text...",
+    "common.hideControls": "Hide Controls",
+    "common.showControls": "Show Controls",
     "common.selected": "Selected",
     "common.theme": "Theme",
     "menu.file": "File",
@@ -571,8 +578,8 @@ const translations: Record<AppLanguage, Record<TranslationKey, string>> = {
     "ai.targetLanguage": "Target language",
     "ai.minimumOriginalCharacters": "Minimum original characters",
     "ai.promptTemplate": "Prompt template",
-    "ai.defaultGamePrompt": "Default Prompt for Video Game Translation",
-    "ai.defaultVideoPrompt": "Default Prompt for Video Subtitle Translation",
+    "ai.defaultGamePrompt": "Prompt for Game Translation",
+    "ai.defaultVideoPrompt": "Prompt for Subtitle Translation",
     "ai.timeoutSeconds": "Timeout seconds",
     "ai.temperature": "Temperature",
     "ai.attachmentTxtFile": "Attachment txt file",
@@ -591,7 +598,8 @@ const translations: Record<AppLanguage, Record<TranslationKey, string>> = {
     "ai.original": "Original",
     "ai.translatedPreview": "Translated preview",
     "ai.selectAll": "Select All",
-    "ai.applySelected": "Apply Selected",
+    "ai.applySelected": "Apply to translated_text",
+    "ai.applySelectedToAiOutput": "Apply to ai_output",
     "ai.discardResult": "Discard Result",
     "ai.candidate": "Candidate",
     "ai.status": "Status",
@@ -603,7 +611,9 @@ const translations: Record<AppLanguage, Record<TranslationKey, string>> = {
     "ai.appliedToTable": "Applied to table.",
     "ai.noSelectedResultsApplied": "No selected results could be applied.",
     "ai.appliedResults": "Applied translation results",
+    "ai.appliedResultsToAiOutput": "Applied translation results to ai_output",
     "ai.appliedResultsAndTemp": "Applied translation results and set state to ⭕️temp",
+    "ai.appliedResultsToAiOutputAndTemp": "Applied translation results to ai_output and set state to ⭕️temp",
     "ai.discardResultConfirm": "Discard the current translation result?",
     "ai.discardResultTitle": "Discard Translation Result",
     "ai.noResultExists": "No translation result exists.",
@@ -752,6 +762,8 @@ const translations: Record<AppLanguage, Record<TranslationKey, string>> = {
     "common.save": "保存",
     "common.saving": "保存中...",
     "common.searchText": "搜索文本...",
+    "common.hideControls": "隐藏控制区",
+    "common.showControls": "显示控制区",
     "common.selected": "已选择",
     "common.theme": "主题",
     "menu.file": "文件",
@@ -952,7 +964,8 @@ const translations: Record<AppLanguage, Record<TranslationKey, string>> = {
     "ai.original": "原文",
     "ai.translatedPreview": "译文预览",
     "ai.selectAll": "全选",
-    "ai.applySelected": "应用选中",
+    "ai.applySelected": "应用翻译到 translated_text",
+    "ai.applySelectedToAiOutput": "应用翻译到 ai_output",
     "ai.discardResult": "丢弃结果",
     "ai.candidate": "候选译文",
     "ai.status": "状态",
@@ -964,7 +977,9 @@ const translations: Record<AppLanguage, Record<TranslationKey, string>> = {
     "ai.appliedToTable": "已应用到表格。",
     "ai.noSelectedResultsApplied": "没有可应用的选中结果。",
     "ai.appliedResults": "已应用翻译结果",
+    "ai.appliedResultsToAiOutput": "已将翻译结果应用到 ai_output",
     "ai.appliedResultsAndTemp": "已应用翻译结果，并将状态设为 ⭕️temp",
+    "ai.appliedResultsToAiOutputAndTemp": "已将翻译结果应用到 ai_output，并将状态设为 ⭕️temp",
     "ai.discardResultConfirm": "丢弃当前翻译结果？",
     "ai.discardResultTitle": "丢弃翻译结果",
     "ai.noResultExists": "当前没有翻译结果。",

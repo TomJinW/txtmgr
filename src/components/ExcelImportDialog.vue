@@ -22,6 +22,7 @@ const titleColumn = defineModel<string>("titleColumn", { required: true });
 const originalColumn = defineModel<string>("originalColumn", { required: true });
 const translatedColumn = defineModel<string>("translatedColumn", { required: true });
 const noteColumn = defineModel<string>("noteColumn", { required: true });
+const aiOutputColumn = defineModel<string>("aiOutputColumn", { required: true });
 const stateColumn = defineModel<string>("stateColumn", { required: true });
 const fileNameMode = defineModel<FileNameImportMode>("fileNameMode", {
   required: true,
@@ -117,6 +118,15 @@ watch(
           />
         </label>
         <label>
+          <span>ai_output column ({{ t("dialog.optional") }})</span>
+          <input
+            v-model="aiOutputColumn"
+            type="text"
+            inputmode="numeric"
+            :placeholder="t('dialog.optional')"
+          />
+        </label>
+        <label>
           <span>state column ({{ t("dialog.optional") }})</span>
           <input
             v-model="stateColumn"
@@ -125,24 +135,26 @@ watch(
             :placeholder="t('dialog.defaultUnmarked')"
           />
         </label>
-        <label>
-          <span>{{ t("dialog.fileNameSource") }} ({{ t("dialog.optional") }})</span>
-          <select v-model="fileNameMode">
-            <option value="none">{{ t("dialog.none") }}</option>
-            <option value="column">{{ t("dialog.column") }}</option>
-            <option value="sheet">{{ t("dialog.sheetName") }}</option>
-          </select>
-        </label>
-        <label>
-          <span>file_name column</span>
-          <input
-            v-model="fileNameColumn"
-            type="text"
-            inputmode="numeric"
-            :disabled="fileNameMode !== 'column'"
-            :placeholder="t('dialog.requiredForColumn')"
-          />
-        </label>
+        <div class="file-name-import-row">
+          <label>
+            <span>{{ t("dialog.fileNameSource") }} ({{ t("dialog.optional") }})</span>
+            <select v-model="fileNameMode">
+              <option value="none">{{ t("dialog.none") }}</option>
+              <option value="column">{{ t("dialog.column") }}</option>
+              <option value="sheet">{{ t("dialog.sheetName") }}</option>
+            </select>
+          </label>
+          <label>
+            <span>file_name column</span>
+            <input
+              v-model="fileNameColumn"
+              type="text"
+              inputmode="numeric"
+              :disabled="fileNameMode !== 'column'"
+              :placeholder="t('dialog.requiredForColumn')"
+            />
+          </label>
+        </div>
       </div>
 
       <label class="checkbox-label append-option">
@@ -159,3 +171,22 @@ watch(
     </form>
   </div>
 </template>
+
+<style scoped>
+.file-name-import-row {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(150px, 0.8fr);
+  gap: 10px;
+}
+
+.file-name-import-row label {
+  min-width: 0;
+}
+
+@media (max-width: 560px) {
+  .file-name-import-row {
+    grid-template-columns: 1fr;
+  }
+}
+</style>
