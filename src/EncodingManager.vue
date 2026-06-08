@@ -8,12 +8,11 @@ import {
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { setTheme as setAppTheme } from "@tauri-apps/api/app";
-import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { readFile, writeFile, writeTextFile } from "@tauri-apps/plugin-fs";
 import {
   cjkFallbackOptions,
   draftStorageKey as sentenceDraftStorageKey,
-  encodingWindowSizeStorageKey,
 } from "./constants";
 import {
   currentLanguage,
@@ -276,7 +275,6 @@ let unlistenEncodingBulkColumn: UnlistenFn | undefined;
 let unlistenEncodingToggleTopPanel: UnlistenFn | undefined;
 let unlistenSetLanguage: UnlistenFn | undefined;
 let unlistenOpenLanguageDialog: UnlistenFn | undefined;
-let unlistenEncodingWindowResize: UnlistenFn | undefined;
 const rowResizeObservers = new Map<number, ResizeObserver>();
 const rowElements = new Map<number, HTMLElement>();
 
@@ -284,18 +282,12 @@ const rowElements = new Map<number, HTMLElement>();
 // edits without adding internal ids to user-exported JSON/TBL data.
 const rowIdentities = new WeakMap<EncodingRow, number>();
 const appWindow = getCurrentWindow();
-void restoreWindowSize(appWindow, encodingWindowSizeStorageKey, 560, 640);
-void registerWindowSizePersistence(appWindow, encodingWindowSizeStorageKey, (unlisten) => {
-  unlistenEncodingWindowResize = unlisten;
-});
-window.addEventListener("resize", handleBrowserWindowResize);
 const systemThemeQuery = window.matchMedia("(prefers-color-scheme: dark)");
 const systemThemeMode = ref<"light" | "dark">(getSystemThemeMode());
 const tableEndSpacerWidth = 24;
 let filterCountRefreshFrame: number | undefined;
 let filterCountRefreshRun = 0;
 let columnDragTimer: number | undefined;
-let windowSizeSaveTimer: number | undefined;
 let draggedColumnKey: EncodingColumnKey | null = null;
 let activeColumnDragElement: HTMLElement | null = null;
 let lastColumnPointerX = 0;
@@ -612,7 +604,6 @@ onBeforeUnmount(() => {
   cancelColumnReorder();
   window.clearTimeout(autoSaveTimer);
   window.clearTimeout(columnWidthSaveTimer);
-  window.clearTimeout(windowSizeSaveTimer);
   if (filterCountRefreshFrame !== undefined) {
     window.cancelAnimationFrame(filterCountRefreshFrame);
   }
@@ -637,8 +628,6 @@ onBeforeUnmount(() => {
   unlistenEncodingToggleTopPanel?.();
   unlistenSetLanguage?.();
   unlistenOpenLanguageDialog?.();
-  unlistenEncodingWindowResize?.();
-  window.removeEventListener("resize", handleBrowserWindowResize);
   if (isMacPlatform()) {
     window.removeEventListener("focus", handleWindowFocus);
   }
@@ -685,107 +674,6 @@ function openSearchOverlay() {
 
 function closeSearchOverlay() {
   isSearchOverlayOpen.value = false;
-}
-
-type StoredWindowSize = {
-  height: number;
-  width: number;
-};
-
-function restoreWindowSizePreference(
-  storageKey: string,
-  minWidth: number,
-  minHeight: number,
-): StoredWindowSize | null {
-  try {
-    const rawSize = window.localStorage.getItem(storageKey);
-    if (!rawSize) return null;
-    const parsed = JSON.parse(rawSize) as Partial<StoredWindowSize>;
-    const width = Number(parsed.width);
-    const height = Number(parsed.height);
-    if (!Number.isFinite(width) || !Number.isFinite(height)) return null;
-    return {
-      height: Math.max(minHeight, Math.round(height)),
-      width: Math.max(minWidth, Math.round(width)),
-    };
-  } catch {
-    window.localStorage.removeItem(storageKey);
-    return null;
-  }
-}
-
-async function restoreWindowSize(
-  targetWindow: ReturnType<typeof getCurrentWindow>,
-  storageKey: string,
-  minWidth: number,
-  minHeight: number,
-) {
-  const restoredSize = restoreWindowSizePreference(storageKey, minWidth, minHeight);
-  if (!restoredSize) return;
-  try {
-    const size = new LogicalSize(restoredSize.width, restoredSize.height);
-    await nextTick();
-    await targetWindow.setSize(size);
-    window.requestAnimationFrame(() => {
-      void targetWindow.setSize(size);
-    });
-    window.setTimeout(() => {
-      void targetWindow.setSize(size);
-    }, 100);
-  } catch (error) {
-    console.warn("Failed to restore encoding window size.", error);
-  }
-}
-
-async function persistWindowSize(
-  targetWindow: ReturnType<typeof getCurrentWindow>,
-  storageKey: string,
-) {
-  try {
-    const [physicalSize, scaleFactor] = await Promise.all([
-      targetWindow.innerSize(),
-      targetWindow.scaleFactor(),
-    ]);
-    const logicalSize = physicalSize.toLogical(scaleFactor);
-    window.localStorage.setItem(
-      storageKey,
-      JSON.stringify({
-        height: Math.round(logicalSize.height),
-        width: Math.round(logicalSize.width),
-      }),
-    );
-  } catch (error) {
-    console.warn("Failed to persist encoding window size.", error);
-  }
-}
-
-async function registerWindowSizePersistence(
-  targetWindow: ReturnType<typeof getCurrentWindow>,
-  storageKey: string,
-  setUnlisten: (unlisten: UnlistenFn) => void,
-) {
-  try {
-    const unlisten = await targetWindow.onResized(() => {
-      window.clearTimeout(windowSizeSaveTimer);
-      windowSizeSaveTimer = window.setTimeout(() => {
-        void persistWindowSize(targetWindow, storageKey);
-      }, 250);
-    });
-    setUnlisten(unlisten);
-  } catch (error) {
-    console.warn("Failed to register encoding window size listener.", error);
-  }
-}
-
-function queuePersistCurrentWindowSize() {
-  window.clearTimeout(windowSizeSaveTimer);
-  windowSizeSaveTimer = window.setTimeout(() => {
-    void persistWindowSize(appWindow, encodingWindowSizeStorageKey);
-  }, 250);
-}
-
-function handleBrowserWindowResize() {
-  queuePersistCurrentWindowSize();
 }
 
 function handleWindowsMenuShortcut(event: KeyboardEvent) {
