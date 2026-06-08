@@ -4872,6 +4872,12 @@ function refreshDefaultCheckMessages() {
           <button type="button" :disabled="!canSaveJson" @click="saveJsonFile">
             {{ isSavingJson ? t("common.saving") : t("encoding.saveJson") }}
           </button>
+          <button type="button" :disabled="!canUndoTableChange" @click="undoTableChange">
+            {{ t("common.undo") }}
+          </button>
+          <button type="button" :disabled="!canRedoTableChange" @click="redoTableChange">
+            {{ t("common.redo") }}
+          </button>
           <button type="button" @click="openImportDialog">{{ t("encoding.importTbl") }}</button>
           <button type="button" @click="openExportDialog">{{ t("encoding.exportTbl") }}</button>
           <button type="button" @click="openExcelImportDialog">{{ t("encoding.importExcel") }}</button>

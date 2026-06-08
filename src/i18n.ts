@@ -28,6 +28,8 @@ type TranslationKey =
   | "common.reset"
   | "common.save"
   | "common.saving"
+  | "common.undo"
+  | "common.redo"
   | "common.searchText"
   | "common.hideControls"
   | "common.showControls"
@@ -472,6 +474,8 @@ const translations: Record<AppLanguage, Record<TranslationKey, string>> = {
     "common.reset": "Reset",
     "common.save": "Save",
     "common.saving": "Saving...",
+    "common.undo": "Undo",
+    "common.redo": "Redo",
     "common.searchText": "Search text...",
     "common.hideControls": "Hide Controls",
     "common.showControls": "Show Controls",
@@ -915,6 +919,8 @@ const translations: Record<AppLanguage, Record<TranslationKey, string>> = {
     "common.reset": "重置",
     "common.save": "保存",
     "common.saving": "保存中...",
+    "common.undo": "撤销",
+    "common.redo": "重做",
     "common.searchText": "搜索文本...",
     "common.hideControls": "隐藏控制区",
     "common.showControls": "显示控制区",

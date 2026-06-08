@@ -5578,6 +5578,12 @@ function startResize(columnIndex: number, event: PointerEvent) {
             <button type="button" :disabled="!canSaveJson" @click="saveJsonFile">
               {{ isSaving ? t("common.saving") : t("main.saveJson") }}
             </button>
+            <button type="button" :disabled="!canUndoTableChange" @click="undoTableChange">
+              {{ t("common.undo") }}
+            </button>
+            <button type="button" :disabled="!canRedoTableChange" @click="redoTableChange">
+              {{ t("common.redo") }}
+            </button>
             <button type="button" @click="openExcelImportDialog">
               {{ t("main.importExcel") }}
             </button>

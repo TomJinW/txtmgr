@@ -154,10 +154,6 @@ struct NativeMenuState {
     encoding_language: Option<String>,
     encoding_event_registered: bool,
     main_column_visibility: Option<HashMap<String, bool>>,
-    main_can_undo: bool,
-    main_can_redo: bool,
-    encoding_can_undo: bool,
-    encoding_can_redo: bool,
 }
 
 type NativeMenuStateStore = Mutex<NativeMenuState>;
@@ -611,33 +607,15 @@ fn find_menu_item<R: Runtime>(items: Vec<MenuItemKind<R>>, id: &str) -> Option<M
 }
 
 fn set_menu_item_enabled<R: Runtime>(
-    menu: Menu<R>,
-    id: &str,
-    enabled: bool,
-) -> tauri::Result<()> {
-    if let Some(item) = find_menu_item(menu.items()?, id) {
-        if let Some(menu_item) = item.as_menuitem() {
-            menu_item.set_enabled(enabled)?;
-        }
-    }
-
-    Ok(())
-}
-
-fn set_menu_item_enabled_for_target<R: Runtime>(
     app: &AppHandle<R>,
-    target: &str,
     id: &str,
     enabled: bool,
 ) -> tauri::Result<()> {
     if let Some(menu) = app.menu() {
-        set_menu_item_enabled(menu, id, enabled)?;
-    }
-
-    let window_label = if target == "encoding" { "encoding" } else { "main" };
-    if let Some(window) = app.get_webview_window(window_label) {
-        if let Some(menu) = window.menu() {
-            set_menu_item_enabled(menu, id, enabled)?;
+        if let Some(item) = find_menu_item(menu.items()?, id) {
+            if let Some(menu_item) = item.as_menuitem() {
+                menu_item.set_enabled(enabled)?;
+            }
         }
     }
 
@@ -647,12 +625,20 @@ fn set_menu_item_enabled_for_target<R: Runtime>(
 #[tauri::command]
 fn set_history_menu_enabled(
     app: AppHandle,
-    menu_state: State<NativeMenuStateStore>,
     target: Option<String>,
     can_undo: bool,
     can_redo: bool,
 ) -> Result<(), String> {
-    let target_name = target.as_deref().unwrap_or("main");
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = app;
+        let _ = target;
+        let _ = can_undo;
+        let _ = can_redo;
+        return Ok(());
+    }
+
+    #[cfg(target_os = "macos")]
     let (undo_id, redo_id) = match target.as_deref() {
         Some("encoding") => (
             ENCODING_UNDO_TABLE_CHANGE_MENU_ID,
@@ -661,19 +647,11 @@ fn set_history_menu_enabled(
         _ => (UNDO_TABLE_CHANGE_MENU_ID, REDO_TABLE_CHANGE_MENU_ID),
     };
 
-    if let Ok(mut state) = menu_state.lock() {
-        if target_name == "encoding" {
-            state.encoding_can_undo = can_undo;
-            state.encoding_can_redo = can_redo;
-        } else {
-            state.main_can_undo = can_undo;
-            state.main_can_redo = can_redo;
-        }
-    }
-
-    set_menu_item_enabled_for_target(&app, target_name, undo_id, can_undo)
+    #[cfg(target_os = "macos")]
+    set_menu_item_enabled(&app, undo_id, can_undo)
         .map_err(|error| error.to_string())?;
-    set_menu_item_enabled_for_target(&app, target_name, redo_id, can_redo)
+    #[cfg(target_os = "macos")]
+    set_menu_item_enabled(&app, redo_id, can_redo)
         .map_err(|error| error.to_string())?;
     Ok(())
 }
@@ -1175,11 +1153,6 @@ fn build_encoding_menu_for<R: Runtime>(
     language: &str,
 ) -> tauri::Result<Menu<R>> {
     let language = normalize_app_language(language);
-    let (can_undo, can_redo) = app
-        .state::<NativeMenuStateStore>()
-        .lock()
-        .map(|state| (state.encoding_can_undo, state.encoding_can_redo))
-        .unwrap_or((false, false));
     let read_json = MenuItemBuilder::with_id(
         ENCODING_READ_JSON_MENU_ID,
         menu_label(language, "read_json"),
@@ -1253,19 +1226,23 @@ fn build_encoding_menu_for<R: Runtime>(
     .accelerator(shortcut_accelerator(ENCODING_COPY_SELECTED_MENU_ID))
     .build(app)?;
 
+    #[cfg(target_os = "macos")]
     let undo_table_change = MenuItemBuilder::with_id(
         ENCODING_UNDO_TABLE_CHANGE_MENU_ID,
         menu_label(language, "undo_table_change"),
     )
     .build(app)?;
-    undo_table_change.set_enabled(can_undo)?;
+    #[cfg(target_os = "macos")]
+    undo_table_change.set_enabled(false)?;
 
+    #[cfg(target_os = "macos")]
     let redo_table_change = MenuItemBuilder::with_id(
         ENCODING_REDO_TABLE_CHANGE_MENU_ID,
         menu_label(language, "redo_table_change"),
     )
     .build(app)?;
-    redo_table_change.set_enabled(can_redo)?;
+    #[cfg(target_os = "macos")]
+    redo_table_change.set_enabled(false)?;
 
     let select_all_filtered = MenuItemBuilder::with_id(
         ENCODING_SELECT_ALL_FILTERED_MENU_ID,
@@ -1367,6 +1344,7 @@ fn build_encoding_menu_for<R: Runtime>(
     let tools_separator_1 = PredefinedMenuItem::separator(app)?;
     let tools_separator_2 = PredefinedMenuItem::separator(app)?;
     let tools_separator_3 = PredefinedMenuItem::separator(app)?;
+    #[cfg(target_os = "macos")]
     let tools_separator_4 = PredefinedMenuItem::separator(app)?;
     let file_separator_1 = PredefinedMenuItem::separator(app)?;
     let file_separator_2 = PredefinedMenuItem::separator(app)?;
@@ -1383,10 +1361,14 @@ fn build_encoding_menu_for<R: Runtime>(
         .item(&export_encoding_excel)
         .build()?;
 
-    let tools_menu = SubmenuBuilder::new(app, menu_label(language, "tools"))
+    let tools_menu_builder = SubmenuBuilder::new(app, menu_label(language, "tools"));
+    #[cfg(target_os = "macos")]
+    let tools_menu_builder = tools_menu_builder
         .item(&undo_table_change)
         .item(&redo_table_change)
-        .item(&tools_separator_4)
+        .item(&tools_separator_4);
+
+    let tools_menu = tools_menu_builder
         .item(&find)
         .item(&find_replace)
         .item(&go_to_row)
@@ -1438,11 +1420,6 @@ fn build_main_menu_for_with_columns<R: Runtime>(
     column_visibility: Option<&HashMap<String, bool>>,
 ) -> tauri::Result<Menu<R>> {
     let language = normalize_app_language(language);
-    let (can_undo, can_redo) = app
-        .state::<NativeMenuStateStore>()
-        .lock()
-        .map(|state| (state.main_can_undo, state.main_can_redo))
-        .unwrap_or((false, false));
     let read_json = MenuItemBuilder::with_id(READ_JSON_MENU_ID, menu_label(language, "read_json"))
         .accelerator(shortcut_accelerator(READ_JSON_MENU_ID))
         .build(app)?;
@@ -1520,19 +1497,23 @@ fn build_main_menu_for_with_columns<R: Runtime>(
     .accelerator(shortcut_accelerator(COPY_SELECTED_MENU_ID))
     .build(app)?;
 
+    #[cfg(target_os = "macos")]
     let undo_table_change = MenuItemBuilder::with_id(
         UNDO_TABLE_CHANGE_MENU_ID,
         menu_label(language, "undo_table_change"),
     )
     .build(app)?;
-    undo_table_change.set_enabled(can_undo)?;
+    #[cfg(target_os = "macos")]
+    undo_table_change.set_enabled(false)?;
 
+    #[cfg(target_os = "macos")]
     let redo_table_change = MenuItemBuilder::with_id(
         REDO_TABLE_CHANGE_MENU_ID,
         menu_label(language, "redo_table_change"),
     )
     .build(app)?;
-    redo_table_change.set_enabled(can_redo)?;
+    #[cfg(target_os = "macos")]
+    redo_table_change.set_enabled(false)?;
 
     let select_all_filtered = MenuItemBuilder::with_id(
         SELECT_ALL_FILTERED_MENU_ID,
@@ -1614,6 +1595,7 @@ fn build_main_menu_for_with_columns<R: Runtime>(
     let tools_separator_2 = PredefinedMenuItem::separator(app)?;
     let tools_separator_3 = PredefinedMenuItem::separator(app)?;
     let tools_separator_4 = PredefinedMenuItem::separator(app)?;
+    #[cfg(target_os = "macos")]
     let tools_separator_5 = PredefinedMenuItem::separator(app)?;
     let file_separator_1 = PredefinedMenuItem::separator(app)?;
     let file_separator_2 = PredefinedMenuItem::separator(app)?;
@@ -1628,10 +1610,14 @@ fn build_main_menu_for_with_columns<R: Runtime>(
         })
         .collect::<tauri::Result<Vec<_>>>()?;
 
-    let tools_menu = SubmenuBuilder::new(app, menu_label(language, "tools"))
+    let tools_menu_builder = SubmenuBuilder::new(app, menu_label(language, "tools"));
+    #[cfg(target_os = "macos")]
+    let tools_menu_builder = tools_menu_builder
         .item(&undo_table_change)
         .item(&redo_table_change)
-        .item(&tools_separator_5)
+        .item(&tools_separator_5);
+
+    let tools_menu = tools_menu_builder
         .item(&find)
         .item(&find_replace)
         .item(&go_to_row)
