@@ -4,7 +4,7 @@ use keyring::Entry;
 use serde::{Deserialize, Serialize};
 use tauri::{
     menu::{
-        CheckMenuItemBuilder, Menu, MenuItem, MenuItemBuilder, MenuItemKind, PredefinedMenuItem,
+        CheckMenuItemBuilder, Menu, MenuItemBuilder, MenuItemKind, PredefinedMenuItem,
         SubmenuBuilder,
     },
     utils::config::WebviewUrl,
@@ -557,7 +557,6 @@ fn truncate_for_status(value: &str) -> String {
     truncated
 }
 
-#[cfg(not(target_os = "linux"))]
 fn shortcut_accelerator(menu_id: &str) -> String {
     // Rust menus and the Windows frontend fallback share this manifest. Add new
     // shortcuts there first so both paths stay synchronized.
@@ -576,19 +575,6 @@ fn shortcut_accelerator(menu_id: &str) -> String {
         .and_then(|value| value.as_str())
         .unwrap_or_else(|| panic!("missing shortcut for menu id {menu_id}"))
         .to_string()
-}
-
-fn menu_item_with_shortcut<R: Runtime>(
-    app: &AppHandle<R>,
-    id: &str,
-    label: &str,
-) -> tauri::Result<MenuItem<R>> {
-    let builder = MenuItemBuilder::with_id(id, label);
-
-    #[cfg(not(target_os = "linux"))]
-    let builder = builder.accelerator(shortcut_accelerator(id));
-
-    builder.build(app)
 }
 
 fn find_menu_item<R: Runtime>(items: Vec<MenuItemKind<R>>, id: &str) -> Option<MenuItemKind<R>> {
@@ -1076,119 +1062,141 @@ fn build_encoding_menu_for<R: Runtime>(
     language: &str,
 ) -> tauri::Result<Menu<R>> {
     let language = normalize_app_language(language);
-    let read_json = menu_item_with_shortcut(
-        app,
+    let read_json = MenuItemBuilder::with_id(
         ENCODING_READ_JSON_MENU_ID,
         menu_label(language, "read_json"),
-    )?;
+    )
+    .accelerator(shortcut_accelerator(ENCODING_READ_JSON_MENU_ID))
+    .build(app)?;
 
-    let save_json = menu_item_with_shortcut(
-        app,
+    let save_json = MenuItemBuilder::with_id(
         ENCODING_SAVE_JSON_MENU_ID,
         menu_label(language, "save_json"),
-    )?;
+    )
+    .accelerator(shortcut_accelerator(ENCODING_SAVE_JSON_MENU_ID))
+    .build(app)?;
 
-    let save_json_as = menu_item_with_shortcut(
-        app,
+    let save_json_as = MenuItemBuilder::with_id(
         ENCODING_SAVE_JSON_AS_MENU_ID,
         menu_label(language, "save_json_as"),
-    )?;
+    )
+    .accelerator(shortcut_accelerator(ENCODING_SAVE_JSON_AS_MENU_ID))
+    .build(app)?;
 
     let import_encoding =
-        menu_item_with_shortcut(app, ENCODING_IMPORT_MENU_ID, menu_label(language, "import_tbl"))?;
+        MenuItemBuilder::with_id(ENCODING_IMPORT_MENU_ID, menu_label(language, "import_tbl"))
+            .accelerator(shortcut_accelerator(ENCODING_IMPORT_MENU_ID))
+            .build(app)?;
 
-    let import_encoding_excel = menu_item_with_shortcut(
-        app,
+    let import_encoding_excel = MenuItemBuilder::with_id(
         ENCODING_IMPORT_EXCEL_MENU_ID,
         menu_label(language, "import_excel"),
-    )?;
+    )
+    .accelerator(shortcut_accelerator(ENCODING_IMPORT_EXCEL_MENU_ID))
+    .build(app)?;
 
     let export_encoding =
-        menu_item_with_shortcut(app, ENCODING_EXPORT_MENU_ID, menu_label(language, "export_tbl"))?;
+        MenuItemBuilder::with_id(ENCODING_EXPORT_MENU_ID, menu_label(language, "export_tbl"))
+            .accelerator(shortcut_accelerator(ENCODING_EXPORT_MENU_ID))
+            .build(app)?;
 
-    let export_encoding_excel = menu_item_with_shortcut(
-        app,
+    let export_encoding_excel = MenuItemBuilder::with_id(
         ENCODING_EXPORT_EXCEL_MENU_ID,
         menu_label(language, "export_excel"),
-    )?;
+    )
+    .accelerator(shortcut_accelerator(ENCODING_EXPORT_EXCEL_MENU_ID))
+    .build(app)?;
 
-    let go_to_row = menu_item_with_shortcut(
-        app,
+    let go_to_row = MenuItemBuilder::with_id(
         ENCODING_GO_TO_ROW_MENU_ID,
         menu_label(language, "go_to_row"),
-    )?;
+    )
+    .accelerator(shortcut_accelerator(ENCODING_GO_TO_ROW_MENU_ID))
+    .build(app)?;
 
-    let clear_list = menu_item_with_shortcut(
-        app,
+    let clear_list = MenuItemBuilder::with_id(
         ENCODING_CLEAR_LIST_MENU_ID,
         menu_label(language, "clear_list"),
-    )?;
+    )
+    .accelerator(shortcut_accelerator(ENCODING_CLEAR_LIST_MENU_ID))
+    .build(app)?;
 
-    let delete_selected = menu_item_with_shortcut(
-        app,
+    let delete_selected = MenuItemBuilder::with_id(
         ENCODING_DELETE_SELECTED_MENU_ID,
         menu_label(language, "delete_selected"),
-    )?;
+    )
+    .accelerator(shortcut_accelerator(ENCODING_DELETE_SELECTED_MENU_ID))
+    .build(app)?;
 
-    let copy_selected = menu_item_with_shortcut(
-        app,
+    let copy_selected = MenuItemBuilder::with_id(
         ENCODING_COPY_SELECTED_MENU_ID,
         menu_label(language, "copy_selected"),
-    )?;
+    )
+    .accelerator(shortcut_accelerator(ENCODING_COPY_SELECTED_MENU_ID))
+    .build(app)?;
 
-    let select_all_filtered = menu_item_with_shortcut(
-        app,
+    let select_all_filtered = MenuItemBuilder::with_id(
         ENCODING_SELECT_ALL_FILTERED_MENU_ID,
         menu_label(language, "select_all_filtered"),
-    )?;
+    )
+    .accelerator(shortcut_accelerator(ENCODING_SELECT_ALL_FILTERED_MENU_ID))
+    .build(app)?;
 
-    let deselect_all = menu_item_with_shortcut(
-        app,
+    let deselect_all = MenuItemBuilder::with_id(
         ENCODING_DESELECT_ALL_ROWS_MENU_ID,
         menu_label(language, "deselect_all"),
-    )?;
+    )
+    .accelerator(shortcut_accelerator(ENCODING_DESELECT_ALL_ROWS_MENU_ID))
+    .build(app)?;
 
-    let bulk_change_column = menu_item_with_shortcut(
-        app,
+    let bulk_change_column = MenuItemBuilder::with_id(
         ENCODING_BULK_CHANGE_COLUMN_MENU_ID,
         menu_label(language, "bulk_column"),
-    )?;
+    )
+    .accelerator(shortcut_accelerator(ENCODING_BULK_CHANGE_COLUMN_MENU_ID))
+    .build(app)?;
 
-    let unmapped_characters = menu_item_with_shortcut(
-        app,
+    let unmapped_characters = MenuItemBuilder::with_id(
         ENCODING_UNMAPPED_CHARACTERS_MENU_ID,
         menu_label(language, "unmapped"),
-    )?;
+    )
+    .accelerator(shortcut_accelerator(ENCODING_UNMAPPED_CHARACTERS_MENU_ID))
+    .build(app)?;
 
-    let unused_encodings = menu_item_with_shortcut(
-        app,
+    let unused_encodings = MenuItemBuilder::with_id(
         ENCODING_UNUSED_ENCODINGS_MENU_ID,
         menu_label(language, "unused"),
-    )?;
+    )
+    .accelerator(shortcut_accelerator(ENCODING_UNUSED_ENCODINGS_MENU_ID))
+    .build(app)?;
 
-    let line_length = menu_item_with_shortcut(
-        app,
+    let line_length = MenuItemBuilder::with_id(
         ENCODING_LINE_LENGTH_MENU_ID,
         menu_label(language, "line_length"),
-    )?;
+    )
+    .accelerator(shortcut_accelerator(ENCODING_LINE_LENGTH_MENU_ID))
+    .build(app)?;
 
-    let language_dialog = menu_item_with_shortcut(
-        app,
+    let language_dialog = MenuItemBuilder::with_id(
         ENCODING_OPEN_LANGUAGE_DIALOG_MENU_ID,
         menu_label(language, "language_dialog"),
-    )?;
+    )
+    .accelerator(shortcut_accelerator(ENCODING_OPEN_LANGUAGE_DIALOG_MENU_ID))
+    .build(app)?;
 
-    let toggle_top_panel = menu_item_with_shortcut(
-        app,
+    let toggle_top_panel = MenuItemBuilder::with_id(
         ENCODING_TOGGLE_TOP_PANEL_MENU_ID,
         menu_label(language, "toggle_top_panel"),
-    )?;
+    )
+    .accelerator(shortcut_accelerator(ENCODING_TOGGLE_TOP_PANEL_MENU_ID))
+    .build(app)?;
 
-    let find = menu_item_with_shortcut(
-        app,
+    let find = MenuItemBuilder::with_id(
         ENCODING_OPEN_SEARCH_PANEL_MENU_ID,
         menu_label(language, "find"),
-    )?;
+    )
+    .accelerator(shortcut_accelerator(ENCODING_OPEN_SEARCH_PANEL_MENU_ID))
+    .build(app)?;
 
     let tools_separator_1 = PredefinedMenuItem::separator(app)?;
     let tools_separator_2 = PredefinedMenuItem::separator(app)?;
@@ -1251,110 +1259,135 @@ fn build_main_menu_for_with_columns<R: Runtime>(
     column_visibility: Option<&HashMap<String, bool>>,
 ) -> tauri::Result<Menu<R>> {
     let language = normalize_app_language(language);
-    let read_json =
-        menu_item_with_shortcut(app, READ_JSON_MENU_ID, menu_label(language, "read_json"))?;
+    let read_json = MenuItemBuilder::with_id(READ_JSON_MENU_ID, menu_label(language, "read_json"))
+        .accelerator(shortcut_accelerator(READ_JSON_MENU_ID))
+        .build(app)?;
 
-    let save_json =
-        menu_item_with_shortcut(app, SAVE_JSON_MENU_ID, menu_label(language, "save_json"))?;
+    let save_json = MenuItemBuilder::with_id(SAVE_JSON_MENU_ID, menu_label(language, "save_json"))
+        .accelerator(shortcut_accelerator(SAVE_JSON_MENU_ID))
+        .build(app)?;
 
     let save_json_as =
-        menu_item_with_shortcut(app, SAVE_JSON_AS_MENU_ID, menu_label(language, "save_json_as"))?;
+        MenuItemBuilder::with_id(SAVE_JSON_AS_MENU_ID, menu_label(language, "save_json_as"))
+            .accelerator(shortcut_accelerator(SAVE_JSON_AS_MENU_ID))
+            .build(app)?;
 
     let import_excel =
-        menu_item_with_shortcut(app, IMPORT_EXCEL_MENU_ID, menu_label(language, "import_excel"))?;
+        MenuItemBuilder::with_id(IMPORT_EXCEL_MENU_ID, menu_label(language, "import_excel"))
+            .accelerator(shortcut_accelerator(IMPORT_EXCEL_MENU_ID))
+            .build(app)?;
 
     let export_excel =
-        menu_item_with_shortcut(app, EXPORT_EXCEL_MENU_ID, menu_label(language, "export_excel"))?;
+        MenuItemBuilder::with_id(EXPORT_EXCEL_MENU_ID, menu_label(language, "export_excel"))
+            .accelerator(shortcut_accelerator(EXPORT_EXCEL_MENU_ID))
+            .build(app)?;
 
     let import_srt =
-        menu_item_with_shortcut(app, IMPORT_SRT_MENU_ID, menu_label(language, "import_srt"))?;
+        MenuItemBuilder::with_id(IMPORT_SRT_MENU_ID, menu_label(language, "import_srt"))
+            .accelerator(shortcut_accelerator(IMPORT_SRT_MENU_ID))
+            .build(app)?;
 
     let export_srt =
-        menu_item_with_shortcut(app, EXPORT_SRT_MENU_ID, menu_label(language, "export_srt"))?;
+        MenuItemBuilder::with_id(EXPORT_SRT_MENU_ID, menu_label(language, "export_srt"))
+            .accelerator(shortcut_accelerator(EXPORT_SRT_MENU_ID))
+            .build(app)?;
 
-    let go_to_row =
-        menu_item_with_shortcut(app, GO_TO_ROW_MENU_ID, menu_label(language, "go_to_row"))?;
+    let go_to_row = MenuItemBuilder::with_id(GO_TO_ROW_MENU_ID, menu_label(language, "go_to_row"))
+        .accelerator(shortcut_accelerator(GO_TO_ROW_MENU_ID))
+        .build(app)?;
 
-    let open_encoding_manager = menu_item_with_shortcut(
-        app,
+    let open_encoding_manager = MenuItemBuilder::with_id(
         OPEN_ENCODING_MANAGER_MENU_ID,
         menu_label(language, "encoding_manager"),
-    )?;
+    )
+    .accelerator(shortcut_accelerator(OPEN_ENCODING_MANAGER_MENU_ID))
+    .build(app)?;
 
-    let llm_server_settings = menu_item_with_shortcut(
-        app,
+    let llm_server_settings = MenuItemBuilder::with_id(
         LLM_SERVER_SETTINGS_MENU_ID,
         menu_label(language, "llm_settings"),
-    )?;
+    )
+    .accelerator(shortcut_accelerator(LLM_SERVER_SETTINGS_MENU_ID))
+    .build(app)?;
 
-    let ai_translation = menu_item_with_shortcut(
-        app,
+    let ai_translation = MenuItemBuilder::with_id(
         AI_TRANSLATION_MENU_ID,
         menu_label(language, "ai_translation"),
-    )?;
+    )
+    .accelerator(shortcut_accelerator(AI_TRANSLATION_MENU_ID))
+    .build(app)?;
 
     let clear_list =
-        menu_item_with_shortcut(app, CLEAR_LIST_MENU_ID, menu_label(language, "clear_list"))?;
+        MenuItemBuilder::with_id(CLEAR_LIST_MENU_ID, menu_label(language, "clear_list"))
+            .accelerator(shortcut_accelerator(CLEAR_LIST_MENU_ID))
+            .build(app)?;
 
-    let delete_selected = menu_item_with_shortcut(
-        app,
+    let delete_selected = MenuItemBuilder::with_id(
         DELETE_SELECTED_MENU_ID,
         menu_label(language, "delete_selected"),
-    )?;
+    )
+    .accelerator(shortcut_accelerator(DELETE_SELECTED_MENU_ID))
+    .build(app)?;
 
-    let copy_selected = menu_item_with_shortcut(
-        app,
+    let copy_selected = MenuItemBuilder::with_id(
         COPY_SELECTED_MENU_ID,
         menu_label(language, "copy_selected"),
-    )?;
+    )
+    .accelerator(shortcut_accelerator(COPY_SELECTED_MENU_ID))
+    .build(app)?;
 
-    let select_all_filtered = menu_item_with_shortcut(
-        app,
+    let select_all_filtered = MenuItemBuilder::with_id(
         SELECT_ALL_FILTERED_MENU_ID,
         menu_label(language, "select_all_filtered"),
-    )?;
+    )
+    .accelerator(shortcut_accelerator(SELECT_ALL_FILTERED_MENU_ID))
+    .build(app)?;
 
-    let deselect_all = menu_item_with_shortcut(
-        app,
+    let deselect_all = MenuItemBuilder::with_id(
         DESELECT_ALL_ROWS_MENU_ID,
         menu_label(language, "deselect_all"),
-    )?;
+    )
+    .accelerator(shortcut_accelerator(DESELECT_ALL_ROWS_MENU_ID))
+    .build(app)?;
 
-    let bulk_change_state = menu_item_with_shortcut(
-        app,
+    let bulk_change_state = MenuItemBuilder::with_id(
         BULK_CHANGE_STATE_MENU_ID,
         menu_label(language, "bulk_state"),
-    )?;
+    )
+    .accelerator(shortcut_accelerator(BULK_CHANGE_STATE_MENU_ID))
+    .build(app)?;
 
-    let bulk_change_column = menu_item_with_shortcut(
-        app,
+    let bulk_change_column = MenuItemBuilder::with_id(
         BULK_CHANGE_COLUMN_MENU_ID,
         menu_label(language, "bulk_column"),
-    )?;
+    )
+    .accelerator(shortcut_accelerator(BULK_CHANGE_COLUMN_MENU_ID))
+    .build(app)?;
 
-    let character_stats = menu_item_with_shortcut(
-        app,
+    let character_stats = MenuItemBuilder::with_id(
         CHARACTER_STATS_MENU_ID,
         menu_label(language, "character_count"),
-    )?;
+    )
+    .accelerator(shortcut_accelerator(CHARACTER_STATS_MENU_ID))
+    .build(app)?;
 
-    let language_dialog = menu_item_with_shortcut(
-        app,
+    let language_dialog = MenuItemBuilder::with_id(
         OPEN_LANGUAGE_DIALOG_MENU_ID,
         menu_label(language, "language_dialog"),
-    )?;
+    )
+    .accelerator(shortcut_accelerator(OPEN_LANGUAGE_DIALOG_MENU_ID))
+    .build(app)?;
 
-    let toggle_top_panel = menu_item_with_shortcut(
-        app,
+    let toggle_top_panel = MenuItemBuilder::with_id(
         TOGGLE_MAIN_TOP_PANEL_MENU_ID,
         menu_label(language, "toggle_top_panel"),
-    )?;
+    )
+    .accelerator(shortcut_accelerator(TOGGLE_MAIN_TOP_PANEL_MENU_ID))
+    .build(app)?;
 
-    let find = menu_item_with_shortcut(
-        app,
-        OPEN_SEARCH_PANEL_MENU_ID,
-        menu_label(language, "find"),
-    )?;
+    let find = MenuItemBuilder::with_id(OPEN_SEARCH_PANEL_MENU_ID, menu_label(language, "find"))
+        .accelerator(shortcut_accelerator(OPEN_SEARCH_PANEL_MENU_ID))
+        .build(app)?;
 
     let tools_separator_1 = PredefinedMenuItem::separator(app)?;
     let tools_separator_2 = PredefinedMenuItem::separator(app)?;

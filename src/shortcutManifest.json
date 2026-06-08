@@ -1,7 +1,7 @@
 {
   "go_to_row": { "mac": "Cmd+G", "other": "Ctrl+G" },
   "open_encoding_manager": { "mac": "Cmd+Shift+E", "other": "Ctrl+Shift+E" },
-  "llm_server_settings": { "mac": "Cmd+,", "other": "Ctrl+Alt+P" },
+  "llm_server_settings": { "mac": "Cmd+,", "other": "Ctrl+," },
   "ai_translation": { "mac": "Cmd+Shift+A", "other": "Ctrl+Shift+A" },
   "read_json": { "mac": "Cmd+O", "other": "Ctrl+O" },
   "save_json": { "mac": "Cmd+S", "other": "Ctrl+S" },
