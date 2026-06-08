@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { t } from "../i18n";
+import type { StateValue } from "../types";
 
 export type AiTranslationTaskStatus =
   | "pending"
@@ -11,11 +12,19 @@ export type AiTranslationTaskStatus =
   | "cancelled"
   | "skipped"
   | "applied"
+  | "applied_translated"
+  | "applied_ai_output"
+  | "applied_note"
+  | "applied_both"
   | "rejected";
+
+export type AiTranslationApplyTarget = "translated_text" | "note" | "ai_output";
+export type AiTranslationApplyMode = "overwrite" | "append";
 
 // This "session" is a review buffer for generated candidates. Applying selected
 // rows is explicit so failed/stopped translations never silently modify data.
 export type AiTranslationTask = {
+  appliedTargets?: AiTranslationApplyTarget[];
   id: string;
   rowIndex: number;
   titleAddr: string;
@@ -39,25 +48,35 @@ export type AiTranslationSession = {
 };
 
 const props = defineProps<{
+  applyMode: AiTranslationApplyMode;
+  applyTarget: AiTranslationApplyTarget;
   selectedTaskIds: string[];
   message: string;
   session: AiTranslationSession;
+  stateOnApply: StateValue;
+  stateOptions: StateValue[];
   updateStateOnApply: boolean;
 }>();
 
 const emit = defineEmits<{
   applySelected: [];
-  applySelectedToAiOutput: [];
   close: [];
   discard: [];
   selectAll: [];
   toggleTask: [taskId: string];
+  updateApplyMode: [value: AiTranslationApplyMode];
+  updateApplyTarget: [value: AiTranslationApplyTarget];
+  updateStateOnApplyValue: [value: StateValue];
   updateStateOnApply: [value: boolean];
 }>();
 
 const statusCounts = computed(() => {
   const counts: Record<AiTranslationTaskStatus, number> = {
     applied: 0,
+    applied_ai_output: 0,
+    applied_both: 0,
+    applied_note: 0,
+    applied_translated: 0,
     cancelled: 0,
     done: 0,
     error: 0,
@@ -79,8 +98,20 @@ const isLoadingTaskRows = computed(
   () => renderedTaskCount.value < props.session.tasks.length,
 );
 const selectedTaskIdSet = computed(() => new Set(props.selectedTaskIds));
+const appliedTaskCount = computed(
+  () => props.session.tasks.filter((task) => taskAppliedTargets(task).length > 0).length,
+);
+const selectableStatuses = new Set<AiTranslationTaskStatus>([
+  "done",
+  "warning",
+  "applied",
+  "applied_translated",
+  "applied_ai_output",
+  "applied_note",
+  "applied_both",
+]);
 const selectableTasks = computed(() =>
-  props.session.tasks.filter((task) => task.status === "done" || task.status === "warning"),
+  props.session.tasks.filter((task) => selectableStatuses.has(task.status)),
 );
 let taskRenderFrame: number | undefined;
 
@@ -134,6 +165,29 @@ function renderMoreTasks() {
 function newlineHintParts(value: string) {
   return value.split("\n");
 }
+
+function taskAppliedTargets(task: AiTranslationTask) {
+  if (task.appliedTargets && task.appliedTargets.length > 0) return task.appliedTargets;
+  if (task.status === "applied_translated") return ["translated_text"] as const;
+  if (task.status === "applied_ai_output") return ["ai_output"] as const;
+  if (task.status === "applied_note") return ["note"] as const;
+  if (task.status === "applied_both") return ["translated_text", "ai_output"] as const;
+  return [];
+}
+
+function applyTargetLabel(target: AiTranslationApplyTarget) {
+  if (target === "translated_text") return "translated_text";
+  if (target === "ai_output") return "ai_output";
+  return "note";
+}
+
+function statusLabel(task: AiTranslationTask) {
+  const targets = taskAppliedTargets(task);
+  if (targets.length > 0) {
+    return `${t("ai.appliedToTargets")} ${targets.map(applyTargetLabel).join(", ")}`;
+  }
+  return task.status;
+}
 </script>
 
 <template>
@@ -173,7 +227,7 @@ function newlineHintParts(value: string) {
         </div>
         <div>
           <span>{{ t("ai.applied") }}</span>
-          <strong>{{ statusCounts.applied }}</strong>
+          <strong>{{ appliedTaskCount }}</strong>
         </div>
       </div>
 
@@ -181,27 +235,52 @@ function newlineHintParts(value: string) {
         <button type="button" :disabled="selectableTasks.length === 0" @click="emit('selectAll')">
           {{ t("ai.selectAll") }}
         </button>
+        <label class="apply-control">
+          <span>{{ t("ai.applyTarget") }}</span>
+          <select
+            :value="applyTarget"
+            @change="emit('updateApplyTarget', ($event.currentTarget as HTMLSelectElement).value as AiTranslationApplyTarget)"
+          >
+            <option value="translated_text">translated_text</option>
+            <option value="note">note</option>
+            <option value="ai_output">ai_output</option>
+          </select>
+        </label>
+        <label class="apply-control">
+          <span>{{ t("ai.applyMode") }}</span>
+          <select
+            :value="applyMode"
+            @change="emit('updateApplyMode', ($event.currentTarget as HTMLSelectElement).value as AiTranslationApplyMode)"
+          >
+            <option value="overwrite">{{ t("ai.applyOverwrite") }}</option>
+            <option value="append">{{ t("ai.applyAppend") }}</option>
+          </select>
+        </label>
         <label class="state-apply-toggle">
           <input
             type="checkbox"
             :checked="updateStateOnApply"
             @change="emit('updateStateOnApply', ($event.currentTarget as HTMLInputElement).checked)"
           />
-          <span>{{ t("ai.setStateToTemp") }}</span>
+          <span>{{ t("ai.setStateOnApply") }}</span>
         </label>
+        <select
+          class="state-apply-select"
+          :disabled="!updateStateOnApply"
+          :value="stateOnApply"
+          :aria-label="t('ai.stateOnApply')"
+          @change="emit('updateStateOnApplyValue', ($event.currentTarget as HTMLSelectElement).value as StateValue)"
+        >
+          <option v-for="state in stateOptions" :key="state" :value="state">
+            {{ state }}
+          </option>
+        </select>
         <button
           type="button"
           :disabled="selectedTaskIds.length === 0"
           @click="emit('applySelected')"
         >
-          {{ t("ai.applySelected") }} {{ selectedTaskIds.length > 0 ? selectedTaskIds.length : "" }}
-        </button>
-        <button
-          type="button"
-          :disabled="selectedTaskIds.length === 0"
-          @click="emit('applySelectedToAiOutput')"
-        >
-          {{ t("ai.applySelectedToAiOutput") }} {{ selectedTaskIds.length > 0 ? selectedTaskIds.length : "" }}
+          {{ t("common.apply") }} {{ selectedTaskIds.length > 0 ? selectedTaskIds.length : "" }}
         </button>
         <button class="danger-btn" type="button" @click="emit('discard')">
           {{ t("ai.discardResult") }}
@@ -223,13 +302,13 @@ function newlineHintParts(value: string) {
             <input
               type="checkbox"
               :checked="selectedTaskIdSet.has(task.id)"
-              :disabled="task.status !== 'done' && task.status !== 'warning'"
+              :disabled="!selectableStatuses.has(task.status)"
               :aria-label="`Select result row ${task.rowIndex + 1}`"
               @change="emit('toggleTask', task.id)"
             />
           </span>
           <span role="cell">{{ task.rowIndex + 1 }}</span>
-          <span role="cell">{{ task.status }}</span>
+          <span role="cell">{{ statusLabel(task) }}</span>
           <span role="cell">{{ task.titleAddr || task.fileName || "-" }}</span>
           <span class="multiline-cell" role="cell">
             <template
@@ -389,6 +468,38 @@ function newlineHintParts(value: string) {
   color: var(--control-text);
   background: var(--panel-bg);
   font-size: 13px;
+}
+
+.state-apply-select {
+  min-height: 30px;
+  border: 1px solid var(--control-border);
+  border-radius: 6px;
+  padding: 5px 9px;
+  color: var(--control-text);
+  background: var(--panel-bg);
+  font-size: 13px;
+}
+
+.apply-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 30px;
+  border: 1px solid var(--control-border);
+  border-radius: 6px;
+  padding: 4px 8px;
+  color: var(--control-text);
+  background: var(--panel-bg);
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.apply-control select {
+  min-height: 24px;
+  border: 1px solid var(--control-border);
+  border-radius: 5px;
+  color: var(--control-text);
+  background: var(--control-bg);
 }
 
 .state-apply-toggle {

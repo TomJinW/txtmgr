@@ -53,6 +53,9 @@ type TranslationKey =
   | "main.exportExcel"
   | "main.clearList"
   | "main.deleteSelected"
+  | "main.copySelected"
+  | "main.selectAllFiltered"
+  | "main.deselectAll"
   | "main.noJsonFileLoaded"
   | "main.noJsonSavePath"
   | "main.caseSensitive"
@@ -162,6 +165,10 @@ type TranslationKey =
   | "message.deleteSelectedConfirmPrefix"
   | "message.deleteSelectedConfirmSuffix"
   | "message.deletedSelected"
+  | "message.copiedSelectedRows"
+  | "message.failedCopySelectedRows"
+  | "message.selectedFilteredRows"
+  | "message.deselectedAllRows"
   | "message.noRowsSelected"
   | "message.dialogTaskRunning"
   | "message.restoredLocalDraft"
@@ -228,9 +235,16 @@ type TranslationKey =
   | "ai.pending"
   | "ai.errors"
   | "ai.applied"
+  | "ai.appliedToTranslatedText"
+  | "ai.appliedToAiOutput"
+  | "ai.appliedToBothTargets"
   | "ai.original"
   | "ai.translatedPreview"
   | "ai.selectAll"
+  | "ai.applyTarget"
+  | "ai.applyMode"
+  | "ai.applyOverwrite"
+  | "ai.applyAppend"
   | "ai.applySelected"
   | "ai.applySelectedToAiOutput"
   | "ai.discardResult"
@@ -240,13 +254,17 @@ type TranslationKey =
   | "ai.waitingForRow"
   | "ai.waitingForPreview"
   | "ai.loadingTaskRows"
-  | "ai.setStateToTemp"
+  | "ai.setStateOnApply"
+  | "ai.stateOnApply"
   | "ai.appliedToTable"
   | "ai.noSelectedResultsApplied"
   | "ai.appliedResults"
+  | "ai.appliedResultsToTarget"
   | "ai.appliedResultsToAiOutput"
-  | "ai.appliedResultsAndTemp"
-  | "ai.appliedResultsToAiOutputAndTemp"
+  | "ai.appliedResultsAndState"
+  | "ai.appliedResultsToAiOutputAndState"
+  | "ai.appliedToTargets"
+  | "ai.setStateTo"
   | "ai.discardResultConfirm"
   | "ai.discardResultTitle"
   | "ai.noResultExists"
@@ -370,7 +388,14 @@ type TranslationKey =
   | "lineLength.help"
   | "bulk.title"
   | "bulk.state"
-  | "bulk.selectedRows";
+  | "bulk.selectedRows"
+  | "bulk.columnTitle"
+  | "bulk.column"
+  | "bulk.value"
+  | "bulk.columnConfirmPrefix"
+  | "bulk.columnConfirmMiddle"
+  | "bulk.columnConfirmSuffix"
+  | "bulk.changedColumnPrefix";
 
 const translations: Record<AppLanguage, Record<TranslationKey, string>> = {
   en: {
@@ -420,6 +445,9 @@ const translations: Record<AppLanguage, Record<TranslationKey, string>> = {
     "main.exportExcel": "Export Excel",
     "main.clearList": "Clear List",
     "main.deleteSelected": "Delete Selected",
+    "main.copySelected": "Copy Selected",
+    "main.selectAllFiltered": "Select Filtered Rows",
+    "main.deselectAll": "Deselect All",
     "main.noJsonFileLoaded": "No JSON file loaded",
     "main.noJsonSavePath": "No JSON save path selected",
     "main.caseSensitive": "Case sensitive",
@@ -529,6 +557,10 @@ const translations: Record<AppLanguage, Record<TranslationKey, string>> = {
     "message.deleteSelectedConfirmPrefix": "Delete",
     "message.deleteSelectedConfirmSuffix": "selected row(s)? This cannot be undone.",
     "message.deletedSelected": "Deleted selected rows",
+    "message.copiedSelectedRows": "Copied selected rows",
+    "message.failedCopySelectedRows": "Failed to copy selected rows.",
+    "message.selectedFilteredRows": "Selected filtered rows",
+    "message.deselectedAllRows": "Deselected all rows.",
     "message.noRowsSelected": "No rows selected.",
     "message.dialogTaskRunning": "A dialog task is still running.",
     "message.restoredLocalDraft": "Restored local draft.",
@@ -595,9 +627,16 @@ const translations: Record<AppLanguage, Record<TranslationKey, string>> = {
     "ai.pending": "Pending",
     "ai.errors": "Errors",
     "ai.applied": "Applied",
+    "ai.appliedToTranslatedText": "Applied to translated_text",
+    "ai.appliedToAiOutput": "Applied to ai_output",
+    "ai.appliedToBothTargets": "Applied to both",
     "ai.original": "Original",
     "ai.translatedPreview": "Translated preview",
     "ai.selectAll": "Select All",
+    "ai.applyTarget": "Apply to",
+    "ai.applyMode": "Mode",
+    "ai.applyOverwrite": "Overwrite",
+    "ai.applyAppend": "Append",
     "ai.applySelected": "Apply to translated_text",
     "ai.applySelectedToAiOutput": "Apply to ai_output",
     "ai.discardResult": "Discard Result",
@@ -607,13 +646,17 @@ const translations: Record<AppLanguage, Record<TranslationKey, string>> = {
     "ai.waitingForRow": "Waiting for the row...",
     "ai.waitingForPreview": "Waiting for preview...",
     "ai.loadingTaskRows": "Loading task rows",
-    "ai.setStateToTemp": "Set state to ⭕️temp",
+    "ai.setStateOnApply": "Set state on apply",
+    "ai.stateOnApply": "State on apply",
     "ai.appliedToTable": "Applied to table.",
     "ai.noSelectedResultsApplied": "No selected results could be applied.",
     "ai.appliedResults": "Applied translation results",
+    "ai.appliedResultsToTarget": "Applied translation results to",
     "ai.appliedResultsToAiOutput": "Applied translation results to ai_output",
-    "ai.appliedResultsAndTemp": "Applied translation results and set state to ⭕️temp",
-    "ai.appliedResultsToAiOutputAndTemp": "Applied translation results to ai_output and set state to ⭕️temp",
+    "ai.appliedResultsAndState": "Applied translation results and set state to",
+    "ai.appliedResultsToAiOutputAndState": "Applied translation results to ai_output and set state to",
+    "ai.appliedToTargets": "Applied to",
+    "ai.setStateTo": "set state to",
     "ai.discardResultConfirm": "Discard the current translation result?",
     "ai.discardResultTitle": "Discard Translation Result",
     "ai.noResultExists": "No translation result exists.",
@@ -738,6 +781,13 @@ const translations: Record<AppLanguage, Record<TranslationKey, string>> = {
     "bulk.title": "Change Selected State",
     "bulk.state": "State",
     "bulk.selectedRows": "Selected rows",
+    "bulk.columnTitle": "Change Selected Column",
+    "bulk.column": "Column",
+    "bulk.value": "Value",
+    "bulk.columnConfirmPrefix": "Change",
+    "bulk.columnConfirmMiddle": "selected row(s) column",
+    "bulk.columnConfirmSuffix": "? This cannot be undone.",
+    "bulk.changedColumnPrefix": "Changed selected rows",
   },
   "zh-Hans": {
     "app.language": "语言",
@@ -786,6 +836,9 @@ const translations: Record<AppLanguage, Record<TranslationKey, string>> = {
     "main.exportExcel": "导出 Excel",
     "main.clearList": "清空列表",
     "main.deleteSelected": "删除选中",
+    "main.copySelected": "复制选中",
+    "main.selectAllFiltered": "全选过滤结果",
+    "main.deselectAll": "全不选",
     "main.noJsonFileLoaded": "未读取 JSON 文件",
     "main.noJsonSavePath": "尚未选择 JSON 保存路径",
     "main.caseSensitive": "区分大小写",
@@ -895,6 +948,10 @@ const translations: Record<AppLanguage, Record<TranslationKey, string>> = {
     "message.deleteSelectedConfirmPrefix": "删除",
     "message.deleteSelectedConfirmSuffix": "个选中行？这个操作不能撤销。",
     "message.deletedSelected": "已删除选中行",
+    "message.copiedSelectedRows": "已复制选中行",
+    "message.failedCopySelectedRows": "复制选中行失败。",
+    "message.selectedFilteredRows": "已选择过滤结果",
+    "message.deselectedAllRows": "已取消全部选择。",
     "message.noRowsSelected": "没有选中行。",
     "message.dialogTaskRunning": "有一个弹窗任务仍在运行。",
     "message.restoredLocalDraft": "已恢复本地草稿。",
@@ -961,9 +1018,16 @@ const translations: Record<AppLanguage, Record<TranslationKey, string>> = {
     "ai.pending": "待处理",
     "ai.errors": "错误",
     "ai.applied": "已应用",
+    "ai.appliedToTranslatedText": "已应用到 translated_text",
+    "ai.appliedToAiOutput": "已应用到 ai_output",
+    "ai.appliedToBothTargets": "已应用到两处",
     "ai.original": "原文",
     "ai.translatedPreview": "译文预览",
     "ai.selectAll": "全选",
+    "ai.applyTarget": "应用到",
+    "ai.applyMode": "模式",
+    "ai.applyOverwrite": "覆盖",
+    "ai.applyAppend": "追加",
     "ai.applySelected": "应用翻译到 translated_text",
     "ai.applySelectedToAiOutput": "应用翻译到 ai_output",
     "ai.discardResult": "丢弃结果",
@@ -973,13 +1037,17 @@ const translations: Record<AppLanguage, Record<TranslationKey, string>> = {
     "ai.waitingForRow": "等待当前行...",
     "ai.waitingForPreview": "等待译文预览...",
     "ai.loadingTaskRows": "正在加载任务行",
-    "ai.setStateToTemp": "将状态设为 ⭕️temp",
+    "ai.setStateOnApply": "应用时修改状态",
+    "ai.stateOnApply": "应用时状态",
     "ai.appliedToTable": "已应用到表格。",
     "ai.noSelectedResultsApplied": "没有可应用的选中结果。",
     "ai.appliedResults": "已应用翻译结果",
+    "ai.appliedResultsToTarget": "已将翻译结果应用到",
     "ai.appliedResultsToAiOutput": "已将翻译结果应用到 ai_output",
-    "ai.appliedResultsAndTemp": "已应用翻译结果，并将状态设为 ⭕️temp",
-    "ai.appliedResultsToAiOutputAndTemp": "已将翻译结果应用到 ai_output，并将状态设为 ⭕️temp",
+    "ai.appliedResultsAndState": "已应用翻译结果，并将状态设为",
+    "ai.appliedResultsToAiOutputAndState": "已将翻译结果应用到 ai_output，并将状态设为",
+    "ai.appliedToTargets": "已应用到",
+    "ai.setStateTo": "将状态设为",
     "ai.discardResultConfirm": "丢弃当前翻译结果？",
     "ai.discardResultTitle": "丢弃翻译结果",
     "ai.noResultExists": "当前没有翻译结果。",
@@ -1104,6 +1172,13 @@ const translations: Record<AppLanguage, Record<TranslationKey, string>> = {
     "bulk.title": "批量修改状态",
     "bulk.state": "状态",
     "bulk.selectedRows": "选中行数",
+    "bulk.columnTitle": "批量修改列内容",
+    "bulk.column": "列",
+    "bulk.value": "值",
+    "bulk.columnConfirmPrefix": "修改",
+    "bulk.columnConfirmMiddle": "个选中行的列",
+    "bulk.columnConfirmSuffix": "？这个操作不能撤销。",
+    "bulk.changedColumnPrefix": "已修改选中行",
   },
 };
 

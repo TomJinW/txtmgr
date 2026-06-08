@@ -3,7 +3,10 @@ use std::{collections::HashMap, fs, path::PathBuf, sync::Mutex, time::Duration};
 use keyring::Entry;
 use serde::{Deserialize, Serialize};
 use tauri::{
-    menu::{CheckMenuItemBuilder, Menu, MenuItemBuilder, MenuItemKind, SubmenuBuilder},
+    menu::{
+        CheckMenuItemBuilder, Menu, MenuItemBuilder, MenuItemKind, PredefinedMenuItem,
+        SubmenuBuilder,
+    },
     utils::config::WebviewUrl,
     AppHandle, Emitter, Manager, Runtime, State, WebviewWindowBuilder, WindowEvent,
 };
@@ -30,15 +33,21 @@ const VIEW_COLUMN_AI_OUTPUT_MENU_ID: &str = "view_column_ai_output";
 const OPEN_LANGUAGE_DIALOG_MENU_ID: &str = "open_language_dialog";
 const LANGUAGE_EN_MENU_ID: &str = "language_en";
 const LANGUAGE_ZH_HANS_MENU_ID: &str = "language_zh_hans";
+const OPEN_SEARCH_PANEL_MENU_ID: &str = "open_search_panel";
 const ENCODING_OPEN_LANGUAGE_DIALOG_MENU_ID: &str = "encoding_open_language_dialog";
 const ENCODING_LANGUAGE_EN_MENU_ID: &str = "encoding_language_en";
 const ENCODING_LANGUAGE_ZH_HANS_MENU_ID: &str = "encoding_language_zh_hans";
+const ENCODING_OPEN_SEARCH_PANEL_MENU_ID: &str = "encoding_open_search_panel";
 const CHARACTER_STATS_MENU_ID: &str = "character_stats";
 const UNDO_TABLE_CHANGE_MENU_ID: &str = "undo_table_change";
 const REDO_TABLE_CHANGE_MENU_ID: &str = "redo_table_change";
 const CLEAR_LIST_MENU_ID: &str = "clear_list";
 const DELETE_SELECTED_MENU_ID: &str = "delete_selected";
+const COPY_SELECTED_MENU_ID: &str = "copy_selected";
+const SELECT_ALL_FILTERED_MENU_ID: &str = "select_all_filtered";
+const DESELECT_ALL_ROWS_MENU_ID: &str = "deselect_all_rows";
 const BULK_CHANGE_STATE_MENU_ID: &str = "bulk_change_state";
+const BULK_CHANGE_COLUMN_MENU_ID: &str = "bulk_change_column";
 const ENCODING_IMPORT_MENU_ID: &str = "encoding_import";
 const ENCODING_READ_JSON_MENU_ID: &str = "encoding_read_json";
 const ENCODING_SAVE_JSON_MENU_ID: &str = "encoding_save_json";
@@ -52,6 +61,10 @@ const ENCODING_LINE_LENGTH_MENU_ID: &str = "encoding_line_length";
 const ENCODING_GO_TO_ROW_MENU_ID: &str = "encoding_go_to_row";
 const ENCODING_CLEAR_LIST_MENU_ID: &str = "encoding_clear_list";
 const ENCODING_DELETE_SELECTED_MENU_ID: &str = "encoding_delete_selected";
+const ENCODING_COPY_SELECTED_MENU_ID: &str = "encoding_copy_selected";
+const ENCODING_SELECT_ALL_FILTERED_MENU_ID: &str = "encoding_select_all_filtered";
+const ENCODING_DESELECT_ALL_ROWS_MENU_ID: &str = "encoding_deselect_all_rows";
+const ENCODING_BULK_CHANGE_COLUMN_MENU_ID: &str = "encoding_bulk_change_column";
 const ENCODING_TOGGLE_TOP_PANEL_MENU_ID: &str = "encoding_toggle_top_panel";
 const LLM_API_KEY_SERVICE: &str = "txtmgr.llm";
 const LLM_API_KEY_ACCOUNT: &str = "default_api_key";
@@ -808,6 +821,13 @@ fn menu_label(language: &str, key: &str) -> &'static str {
                 "Show/Hide Controls"
             }
         }
+        "find" => {
+            if zh {
+                "查找..."
+            } else {
+                "Find..."
+            }
+        }
         "tools" => {
             if zh {
                 "工具"
@@ -831,9 +851,9 @@ fn menu_label(language: &str, key: &str) -> &'static str {
         }
         "language_dialog" => {
             if zh {
-                "语言..."
+                "App 语言..."
             } else {
-                "Language..."
+                "App Language..."
             }
         }
         "read_json" => {
@@ -927,11 +947,39 @@ fn menu_label(language: &str, key: &str) -> &'static str {
                 "Delete Selected"
             }
         }
+        "copy_selected" => {
+            if zh {
+                "复制选中"
+            } else {
+                "Copy Selected"
+            }
+        }
+        "select_all_filtered" => {
+            if zh {
+                "全选过滤结果"
+            } else {
+                "Select Filtered Rows"
+            }
+        }
+        "deselect_all" => {
+            if zh {
+                "全不选"
+            } else {
+                "Deselect All"
+            }
+        }
         "bulk_state" => {
             if zh {
-                "修改选中状态..."
+                "批量修改选中状态..."
             } else {
                 "Change Selected State..."
+            }
+        }
+        "bulk_column" => {
+            if zh {
+                "批量修改选中列内容..."
+            } else {
+                "Change Selected Column..."
             }
         }
         "character_count" => {
@@ -1080,6 +1128,34 @@ fn build_encoding_menu_for<R: Runtime>(
     .accelerator(shortcut_accelerator(ENCODING_DELETE_SELECTED_MENU_ID))
     .build(app)?;
 
+    let copy_selected = MenuItemBuilder::with_id(
+        ENCODING_COPY_SELECTED_MENU_ID,
+        menu_label(language, "copy_selected"),
+    )
+    .accelerator(shortcut_accelerator(ENCODING_COPY_SELECTED_MENU_ID))
+    .build(app)?;
+
+    let select_all_filtered = MenuItemBuilder::with_id(
+        ENCODING_SELECT_ALL_FILTERED_MENU_ID,
+        menu_label(language, "select_all_filtered"),
+    )
+    .accelerator(shortcut_accelerator(ENCODING_SELECT_ALL_FILTERED_MENU_ID))
+    .build(app)?;
+
+    let deselect_all = MenuItemBuilder::with_id(
+        ENCODING_DESELECT_ALL_ROWS_MENU_ID,
+        menu_label(language, "deselect_all"),
+    )
+    .accelerator(shortcut_accelerator(ENCODING_DESELECT_ALL_ROWS_MENU_ID))
+    .build(app)?;
+
+    let bulk_change_column = MenuItemBuilder::with_id(
+        ENCODING_BULK_CHANGE_COLUMN_MENU_ID,
+        menu_label(language, "bulk_column"),
+    )
+    .accelerator(shortcut_accelerator(ENCODING_BULK_CHANGE_COLUMN_MENU_ID))
+    .build(app)?;
+
     let unmapped_characters = MenuItemBuilder::with_id(
         ENCODING_UNMAPPED_CHARACTERS_MENU_ID,
         menu_label(language, "unmapped"),
@@ -1115,21 +1191,44 @@ fn build_encoding_menu_for<R: Runtime>(
     .accelerator(shortcut_accelerator(ENCODING_TOGGLE_TOP_PANEL_MENU_ID))
     .build(app)?;
 
+    let find = MenuItemBuilder::with_id(
+        ENCODING_OPEN_SEARCH_PANEL_MENU_ID,
+        menu_label(language, "find"),
+    )
+    .accelerator(shortcut_accelerator(ENCODING_OPEN_SEARCH_PANEL_MENU_ID))
+    .build(app)?;
+
+    let tools_separator_1 = PredefinedMenuItem::separator(app)?;
+    let tools_separator_2 = PredefinedMenuItem::separator(app)?;
+    let tools_separator_3 = PredefinedMenuItem::separator(app)?;
+    let file_separator_1 = PredefinedMenuItem::separator(app)?;
+    let file_separator_2 = PredefinedMenuItem::separator(app)?;
+
     let file_menu = SubmenuBuilder::new(app, menu_label(language, "file"))
         .item(&read_json)
         .item(&save_json)
         .item(&save_json_as)
+        .item(&file_separator_1)
         .item(&import_encoding)
         .item(&export_encoding)
+        .item(&file_separator_2)
         .item(&import_encoding_excel)
         .item(&export_encoding_excel)
         .build()?;
 
     let tools_menu = SubmenuBuilder::new(app, menu_label(language, "tools"))
+        .item(&find)
         .item(&go_to_row)
-        .item(&language_dialog)
+        .item(&tools_separator_1)
+        .item(&select_all_filtered)
+        .item(&deselect_all)
+        .item(&copy_selected)
+        .item(&bulk_change_column)
+        .item(&tools_separator_2)
         .item(&clear_list)
         .item(&delete_selected)
+        .item(&tools_separator_3)
+        .item(&language_dialog)
         .build()?;
 
     let view_menu = SubmenuBuilder::new(app, menu_label(language, "view"))
@@ -1230,11 +1329,39 @@ fn build_main_menu_for_with_columns<R: Runtime>(
     .accelerator(shortcut_accelerator(DELETE_SELECTED_MENU_ID))
     .build(app)?;
 
+    let copy_selected = MenuItemBuilder::with_id(
+        COPY_SELECTED_MENU_ID,
+        menu_label(language, "copy_selected"),
+    )
+    .accelerator(shortcut_accelerator(COPY_SELECTED_MENU_ID))
+    .build(app)?;
+
+    let select_all_filtered = MenuItemBuilder::with_id(
+        SELECT_ALL_FILTERED_MENU_ID,
+        menu_label(language, "select_all_filtered"),
+    )
+    .accelerator(shortcut_accelerator(SELECT_ALL_FILTERED_MENU_ID))
+    .build(app)?;
+
+    let deselect_all = MenuItemBuilder::with_id(
+        DESELECT_ALL_ROWS_MENU_ID,
+        menu_label(language, "deselect_all"),
+    )
+    .accelerator(shortcut_accelerator(DESELECT_ALL_ROWS_MENU_ID))
+    .build(app)?;
+
     let bulk_change_state = MenuItemBuilder::with_id(
         BULK_CHANGE_STATE_MENU_ID,
         menu_label(language, "bulk_state"),
     )
     .accelerator(shortcut_accelerator(BULK_CHANGE_STATE_MENU_ID))
+    .build(app)?;
+
+    let bulk_change_column = MenuItemBuilder::with_id(
+        BULK_CHANGE_COLUMN_MENU_ID,
+        menu_label(language, "bulk_column"),
+    )
+    .accelerator(shortcut_accelerator(BULK_CHANGE_COLUMN_MENU_ID))
     .build(app)?;
 
     let character_stats = MenuItemBuilder::with_id(
@@ -1258,6 +1385,18 @@ fn build_main_menu_for_with_columns<R: Runtime>(
     .accelerator(shortcut_accelerator(TOGGLE_MAIN_TOP_PANEL_MENU_ID))
     .build(app)?;
 
+    let find = MenuItemBuilder::with_id(OPEN_SEARCH_PANEL_MENU_ID, menu_label(language, "find"))
+        .accelerator(shortcut_accelerator(OPEN_SEARCH_PANEL_MENU_ID))
+        .build(app)?;
+
+    let tools_separator_1 = PredefinedMenuItem::separator(app)?;
+    let tools_separator_2 = PredefinedMenuItem::separator(app)?;
+    let tools_separator_3 = PredefinedMenuItem::separator(app)?;
+    let tools_separator_4 = PredefinedMenuItem::separator(app)?;
+    let file_separator_1 = PredefinedMenuItem::separator(app)?;
+    let file_separator_2 = PredefinedMenuItem::separator(app)?;
+    let view_separator_1 = PredefinedMenuItem::separator(app)?;
+
     let view_column_items = main_column_menu_items()
         .into_iter()
         .map(|(menu_id, column_key, label_key)| {
@@ -1268,14 +1407,23 @@ fn build_main_menu_for_with_columns<R: Runtime>(
         .collect::<tauri::Result<Vec<_>>>()?;
 
     let tools_menu = SubmenuBuilder::new(app, menu_label(language, "tools"))
+        .item(&find)
         .item(&go_to_row)
-        .item(&language_dialog)
+        .item(&tools_separator_1)
+        .item(&select_all_filtered)
+        .item(&deselect_all)
+        .item(&copy_selected)
+        .item(&bulk_change_state)
+        .item(&bulk_change_column)
+        .item(&tools_separator_2)
+        .item(&clear_list)
+        .item(&delete_selected)
+        .item(&tools_separator_3)
         .item(&open_encoding_manager)
         .item(&llm_server_settings)
         .item(&ai_translation)
-        .item(&clear_list)
-        .item(&delete_selected)
-        .item(&bulk_change_state)
+        .item(&tools_separator_4)
+        .item(&language_dialog)
         .build()?;
 
     let statistics_menu = SubmenuBuilder::new(app, menu_label(language, "statistics"))
@@ -1286,14 +1434,17 @@ fn build_main_menu_for_with_columns<R: Runtime>(
         .item(&read_json)
         .item(&save_json)
         .item(&save_json_as)
+        .item(&file_separator_1)
         .item(&import_excel)
         .item(&export_excel)
+        .item(&file_separator_2)
         .item(&import_srt)
         .item(&export_srt)
         .build()?;
 
     let view_menu = SubmenuBuilder::new(app, menu_label(language, "view"))
         .item(&toggle_top_panel)
+        .item(&view_separator_1)
         .build()?;
     for item in &view_column_items {
         view_menu.append(item)?;
@@ -1416,6 +1567,9 @@ fn emit_encoding_menu_event<R: Runtime>(app: &AppHandle<R>, menu_id: &str) {
         ENCODING_GO_TO_ROW_MENU_ID => {
             let _ = app.emit_to("encoding", "encoding-open-go-to-row", ());
         }
+        ENCODING_OPEN_SEARCH_PANEL_MENU_ID => {
+            let _ = app.emit_to("encoding", "encoding-open-search-panel", ());
+        }
         ENCODING_TOGGLE_TOP_PANEL_MENU_ID => {
             let _ = app.emit_to("encoding", "encoding-toggle-top-panel", ());
         }
@@ -1424,6 +1578,18 @@ fn emit_encoding_menu_event<R: Runtime>(app: &AppHandle<R>, menu_id: &str) {
         }
         ENCODING_DELETE_SELECTED_MENU_ID => {
             let _ = app.emit_to("encoding", "encoding-delete-selected", ());
+        }
+        ENCODING_COPY_SELECTED_MENU_ID => {
+            let _ = app.emit_to("encoding", "encoding-copy-selected", ());
+        }
+        ENCODING_SELECT_ALL_FILTERED_MENU_ID => {
+            let _ = app.emit_to("encoding", "encoding-select-all-filtered", ());
+        }
+        ENCODING_DESELECT_ALL_ROWS_MENU_ID => {
+            let _ = app.emit_to("encoding", "encoding-deselect-all-rows", ());
+        }
+        ENCODING_BULK_CHANGE_COLUMN_MENU_ID => {
+            let _ = app.emit_to("encoding", "encoding-bulk-change-column", ());
         }
         ENCODING_UNMAPPED_CHARACTERS_MENU_ID => {
             let _ = app.emit_to("encoding", "encoding-open-unmapped-characters", ());
@@ -1467,6 +1633,9 @@ fn emit_main_menu_event<R: Runtime>(app: &AppHandle<R>, menu_id: &str) {
     match menu_id {
         GO_TO_ROW_MENU_ID => {
             let _ = app.emit_to("main", "open-go-to-row", ());
+        }
+        OPEN_SEARCH_PANEL_MENU_ID => {
+            let _ = app.emit_to("main", "open-search-panel", ());
         }
         OPEN_ENCODING_MANAGER_MENU_ID => {
             let _ = app.emit_to("main", "open-encoding-manager", ());
@@ -1530,8 +1699,20 @@ fn emit_main_menu_event<R: Runtime>(app: &AppHandle<R>, menu_id: &str) {
         DELETE_SELECTED_MENU_ID => {
             let _ = app.emit_to("main", "delete-selected", ());
         }
+        COPY_SELECTED_MENU_ID => {
+            let _ = app.emit_to("main", "copy-selected", ());
+        }
+        SELECT_ALL_FILTERED_MENU_ID => {
+            let _ = app.emit_to("main", "select-all-filtered", ());
+        }
+        DESELECT_ALL_ROWS_MENU_ID => {
+            let _ = app.emit_to("main", "deselect-all-rows", ());
+        }
         BULK_CHANGE_STATE_MENU_ID => {
             let _ = app.emit_to("main", "bulk-change-state", ());
+        }
+        BULK_CHANGE_COLUMN_MENU_ID => {
+            let _ = app.emit_to("main", "bulk-change-column", ());
         }
         CHARACTER_STATS_MENU_ID => {
             let _ = app.emit_to("main", "open-character-stats", ());
@@ -1646,9 +1827,14 @@ pub fn run() {
                             | ENCODING_EXPORT_MENU_ID
                             | ENCODING_EXPORT_EXCEL_MENU_ID
                             | ENCODING_GO_TO_ROW_MENU_ID
+                            | ENCODING_OPEN_SEARCH_PANEL_MENU_ID
                             | ENCODING_TOGGLE_TOP_PANEL_MENU_ID
                             | ENCODING_CLEAR_LIST_MENU_ID
                             | ENCODING_DELETE_SELECTED_MENU_ID
+                            | ENCODING_COPY_SELECTED_MENU_ID
+                            | ENCODING_SELECT_ALL_FILTERED_MENU_ID
+                            | ENCODING_DESELECT_ALL_ROWS_MENU_ID
+                            | ENCODING_BULK_CHANGE_COLUMN_MENU_ID
                             | ENCODING_UNMAPPED_CHARACTERS_MENU_ID
                             | ENCODING_UNUSED_ENCODINGS_MENU_ID
                             | ENCODING_LINE_LENGTH_MENU_ID

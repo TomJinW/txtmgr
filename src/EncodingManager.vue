@@ -8,11 +8,12 @@ import {
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { setTheme as setAppTheme } from "@tauri-apps/api/app";
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 import { readFile, writeFile, writeTextFile } from "@tauri-apps/plugin-fs";
 import {
   cjkFallbackOptions,
   draftStorageKey as sentenceDraftStorageKey,
+  encodingWindowSizeStorageKey,
 } from "./constants";
 import {
   currentLanguage,
@@ -31,6 +32,7 @@ import {
   requiredPositiveInteger,
 } from "./excel";
 import CharacterStatsDialog from "./components/CharacterStatsDialog.vue";
+import BulkColumnDialog, { type BulkEditableColumn } from "./components/BulkColumnDialog.vue";
 import EncodingLineLengthDialog, {
   type LineLengthBracketTokenType,
   type LineLengthCharacterType,
@@ -85,6 +87,7 @@ const columnWidthStorageKey = "txtmgr.encodingColumnWidths.v3";
 const columnFontSizeStorageKey = "txtmgr.encodingColumnFontSizes.v1";
 const columnOrderStorageKey = "txtmgr.encodingColumnOrder.v1";
 const fallbackStorageKey = "txtmgr.encodingFallback.v2";
+const bulkColumnStorageKey = "txtmgr.encodingBulkColumnKey.v1";
 const topPanelVisibleStorageKey = "txtmgr.encodingTopPanelVisible.v1";
 const themeStorageKey = "txtmgr.theme.v1";
 const defaultColumnWidths = [112, 105, 112, 76, 200];
@@ -132,11 +135,21 @@ const isCaseSensitiveSearch = ref(false);
 const selectedSearchColumns = ref<(keyof EncodingRow)[]>([...searchableColumns]);
 const activeFilters = ref<EncodingFilter[]>([]);
 const selectedRowIds = ref<Set<number>>(new Set());
+const selectionAnchorRowId = ref<number | null>(null);
+const bulkEditableColumns: { key: BulkEditableColumn; label: string }[] = [
+  { key: "original_char", label: "char" },
+  { key: "code", label: "code" },
+  { key: "width", label: "width" },
+  { key: "note", label: "note" },
+];
+const bulkColumnKey = ref<BulkEditableColumn>(restoreBulkColumnKey());
+const bulkColumnValue = ref("");
 const pendingDeleteIndex = ref<number | null>(null);
 const goToRowValue = ref("");
 const rowFilterStart = ref("");
 const rowFilterEnd = ref("");
 const isGoToRowDialogOpen = ref(false);
+const isBulkColumnDialogOpen = ref(false);
 const isUnmappedCharactersDialogOpen = ref(false);
 const isUnusedEncodingsDialogOpen = ref(false);
 const isLineLengthDialogOpen = ref(false);
@@ -245,6 +258,7 @@ let columnWidthSaveTimer: number | undefined;
 let unlistenEncodingReadJson: UnlistenFn | undefined;
 let unlistenEncodingSaveJson: UnlistenFn | undefined;
 let unlistenEncodingSaveJsonAs: UnlistenFn | undefined;
+let unlistenEncodingOpenSearchPanel: UnlistenFn | undefined;
 let unlistenEncodingImport: UnlistenFn | undefined;
 let unlistenEncodingImportExcel: UnlistenFn | undefined;
 let unlistenEncodingExport: UnlistenFn | undefined;
@@ -255,9 +269,14 @@ let unlistenEncodingOpenLineLength: UnlistenFn | undefined;
 let unlistenEncodingOpenGoToRow: UnlistenFn | undefined;
 let unlistenEncodingClearList: UnlistenFn | undefined;
 let unlistenEncodingDeleteSelected: UnlistenFn | undefined;
+let unlistenEncodingCopySelected: UnlistenFn | undefined;
+let unlistenEncodingSelectAllFiltered: UnlistenFn | undefined;
+let unlistenEncodingDeselectAllRows: UnlistenFn | undefined;
+let unlistenEncodingBulkColumn: UnlistenFn | undefined;
 let unlistenEncodingToggleTopPanel: UnlistenFn | undefined;
 let unlistenSetLanguage: UnlistenFn | undefined;
 let unlistenOpenLanguageDialog: UnlistenFn | undefined;
+let unlistenEncodingWindowResize: UnlistenFn | undefined;
 const rowResizeObservers = new Map<number, ResizeObserver>();
 const rowElements = new Map<number, HTMLElement>();
 
@@ -265,12 +284,18 @@ const rowElements = new Map<number, HTMLElement>();
 // edits without adding internal ids to user-exported JSON/TBL data.
 const rowIdentities = new WeakMap<EncodingRow, number>();
 const appWindow = getCurrentWindow();
+void restoreWindowSize(appWindow, encodingWindowSizeStorageKey, 560, 640);
+void registerWindowSizePersistence(appWindow, encodingWindowSizeStorageKey, (unlisten) => {
+  unlistenEncodingWindowResize = unlisten;
+});
+window.addEventListener("resize", handleBrowserWindowResize);
 const systemThemeQuery = window.matchMedia("(prefers-color-scheme: dark)");
 const systemThemeMode = ref<"light" | "dark">(getSystemThemeMode());
 const tableEndSpacerWidth = 24;
 let filterCountRefreshFrame: number | undefined;
 let filterCountRefreshRun = 0;
 let columnDragTimer: number | undefined;
+let windowSizeSaveTimer: number | undefined;
 let draggedColumnKey: EncodingColumnKey | null = null;
 let activeColumnDragElement: HTMLElement | null = null;
 let lastColumnPointerX = 0;
@@ -518,6 +543,10 @@ watch(themeMode, () => {
   void syncNativeChrome();
 });
 
+watch(bulkColumnKey, () => {
+  persistBulkColumnKey();
+});
+
 watch(isTopPanelVisible, () => {
   window.localStorage.setItem(topPanelVisibleStorageKey, String(isTopPanelVisible.value));
   nextTick(() => {
@@ -583,12 +612,14 @@ onBeforeUnmount(() => {
   cancelColumnReorder();
   window.clearTimeout(autoSaveTimer);
   window.clearTimeout(columnWidthSaveTimer);
+  window.clearTimeout(windowSizeSaveTimer);
   if (filterCountRefreshFrame !== undefined) {
     window.cancelAnimationFrame(filterCountRefreshFrame);
   }
   unlistenEncodingReadJson?.();
   unlistenEncodingSaveJson?.();
   unlistenEncodingSaveJsonAs?.();
+  unlistenEncodingOpenSearchPanel?.();
   unlistenEncodingImport?.();
   unlistenEncodingImportExcel?.();
   unlistenEncodingExport?.();
@@ -599,9 +630,15 @@ onBeforeUnmount(() => {
   unlistenEncodingOpenGoToRow?.();
   unlistenEncodingClearList?.();
   unlistenEncodingDeleteSelected?.();
+  unlistenEncodingCopySelected?.();
+  unlistenEncodingSelectAllFiltered?.();
+  unlistenEncodingDeselectAllRows?.();
+  unlistenEncodingBulkColumn?.();
   unlistenEncodingToggleTopPanel?.();
   unlistenSetLanguage?.();
   unlistenOpenLanguageDialog?.();
+  unlistenEncodingWindowResize?.();
+  window.removeEventListener("resize", handleBrowserWindowResize);
   if (isMacPlatform()) {
     window.removeEventListener("focus", handleWindowFocus);
   }
@@ -650,6 +687,107 @@ function closeSearchOverlay() {
   isSearchOverlayOpen.value = false;
 }
 
+type StoredWindowSize = {
+  height: number;
+  width: number;
+};
+
+function restoreWindowSizePreference(
+  storageKey: string,
+  minWidth: number,
+  minHeight: number,
+): StoredWindowSize | null {
+  try {
+    const rawSize = window.localStorage.getItem(storageKey);
+    if (!rawSize) return null;
+    const parsed = JSON.parse(rawSize) as Partial<StoredWindowSize>;
+    const width = Number(parsed.width);
+    const height = Number(parsed.height);
+    if (!Number.isFinite(width) || !Number.isFinite(height)) return null;
+    return {
+      height: Math.max(minHeight, Math.round(height)),
+      width: Math.max(minWidth, Math.round(width)),
+    };
+  } catch {
+    window.localStorage.removeItem(storageKey);
+    return null;
+  }
+}
+
+async function restoreWindowSize(
+  targetWindow: ReturnType<typeof getCurrentWindow>,
+  storageKey: string,
+  minWidth: number,
+  minHeight: number,
+) {
+  const restoredSize = restoreWindowSizePreference(storageKey, minWidth, minHeight);
+  if (!restoredSize) return;
+  try {
+    const size = new LogicalSize(restoredSize.width, restoredSize.height);
+    await nextTick();
+    await targetWindow.setSize(size);
+    window.requestAnimationFrame(() => {
+      void targetWindow.setSize(size);
+    });
+    window.setTimeout(() => {
+      void targetWindow.setSize(size);
+    }, 100);
+  } catch (error) {
+    console.warn("Failed to restore encoding window size.", error);
+  }
+}
+
+async function persistWindowSize(
+  targetWindow: ReturnType<typeof getCurrentWindow>,
+  storageKey: string,
+) {
+  try {
+    const [physicalSize, scaleFactor] = await Promise.all([
+      targetWindow.innerSize(),
+      targetWindow.scaleFactor(),
+    ]);
+    const logicalSize = physicalSize.toLogical(scaleFactor);
+    window.localStorage.setItem(
+      storageKey,
+      JSON.stringify({
+        height: Math.round(logicalSize.height),
+        width: Math.round(logicalSize.width),
+      }),
+    );
+  } catch (error) {
+    console.warn("Failed to persist encoding window size.", error);
+  }
+}
+
+async function registerWindowSizePersistence(
+  targetWindow: ReturnType<typeof getCurrentWindow>,
+  storageKey: string,
+  setUnlisten: (unlisten: UnlistenFn) => void,
+) {
+  try {
+    const unlisten = await targetWindow.onResized(() => {
+      window.clearTimeout(windowSizeSaveTimer);
+      windowSizeSaveTimer = window.setTimeout(() => {
+        void persistWindowSize(targetWindow, storageKey);
+      }, 250);
+    });
+    setUnlisten(unlisten);
+  } catch (error) {
+    console.warn("Failed to register encoding window size listener.", error);
+  }
+}
+
+function queuePersistCurrentWindowSize() {
+  window.clearTimeout(windowSizeSaveTimer);
+  windowSizeSaveTimer = window.setTimeout(() => {
+    void persistWindowSize(appWindow, encodingWindowSizeStorageKey);
+  }, 250);
+}
+
+function handleBrowserWindowResize() {
+  queuePersistCurrentWindowSize();
+}
+
 function handleWindowsMenuShortcut(event: KeyboardEvent) {
   if (!isWindowsPlatform()) return;
 
@@ -664,6 +802,10 @@ function handleWindowsMenuShortcut(event: KeyboardEvent) {
     { action: "encoding_go_to_row", run: () => openGoToRowDialog() },
     { action: "encoding_clear_list", run: () => void clearRows() },
     { action: "encoding_delete_selected", run: () => void deleteSelectedRows() },
+    { action: "encoding_copy_selected", run: () => void copySelectedRowsForSpreadsheet() },
+    { action: "encoding_select_all_filtered", run: () => selectAllFilteredRows() },
+    { action: "encoding_deselect_all_rows", run: () => deselectAllRows() },
+    { action: "encoding_bulk_change_column", run: () => openBulkColumnDialog() },
     { action: "encoding_toggle_top_panel", run: () => toggleTopPanel() },
     { action: "encoding_unmapped_characters", run: () => void openUnmappedCharactersDialog() },
     { action: "encoding_unused_encodings", run: () => void openUnusedEncodingsDialog() },
@@ -709,6 +851,17 @@ function registerMenuListeners() {
     })
     .catch((error) => {
       console.warn("Failed to register encoding save JSON as menu listener.", error);
+    });
+
+  listen("encoding-open-search-panel", () => {
+    if (hasOpenEncodingDialog()) return;
+    openSearchOverlay();
+  })
+    .then((unlisten) => {
+      unlistenEncodingOpenSearchPanel = unlisten;
+    })
+    .catch((error) => {
+      console.warn("Failed to register encoding search panel menu listener.", error);
     });
 
   listen("encoding-import", () => {
@@ -769,6 +922,46 @@ function registerMenuListeners() {
     })
     .catch((error) => {
       console.warn("Failed to register encoding delete selected menu listener.", error);
+    });
+
+  listen("encoding-copy-selected", () => {
+    void copySelectedRowsForSpreadsheet();
+  })
+    .then((unlisten) => {
+      unlistenEncodingCopySelected = unlisten;
+    })
+    .catch((error) => {
+      console.warn("Failed to register encoding copy selected menu listener.", error);
+    });
+
+  listen("encoding-select-all-filtered", () => {
+    selectAllFilteredRows();
+  })
+    .then((unlisten) => {
+      unlistenEncodingSelectAllFiltered = unlisten;
+    })
+    .catch((error) => {
+      console.warn("Failed to register encoding select all filtered menu listener.", error);
+    });
+
+  listen("encoding-deselect-all-rows", () => {
+    deselectAllRows();
+  })
+    .then((unlisten) => {
+      unlistenEncodingDeselectAllRows = unlisten;
+    })
+    .catch((error) => {
+      console.warn("Failed to register encoding deselect all rows menu listener.", error);
+    });
+
+  listen("encoding-bulk-change-column", () => {
+    openBulkColumnDialog();
+  })
+    .then((unlisten) => {
+      unlistenEncodingBulkColumn = unlisten;
+    })
+    .catch((error) => {
+      console.warn("Failed to register encoding bulk column menu listener.", error);
     });
 
   listen("encoding-toggle-top-panel", () => {
@@ -897,6 +1090,7 @@ async function loadJsonFromPath(path: string) {
     rows.value = importedRows;
     jsonPath.value = path;
     selectedRowIds.value = new Set();
+    selectionAnchorRowId.value = null;
     pendingDeleteIndex.value = null;
     resetVirtualRowState();
     statusMessage.value = `${t("message.loadedRows")}: ${importedRows.length} ${t("message.rows")}.`;
@@ -1017,6 +1211,7 @@ async function confirmImportOverwrite(title: string) {
 }
 
 type EncodingDialog =
+  | "bulkColumn"
   | "excelExport"
   | "excelImport"
   | "exportText"
@@ -1047,6 +1242,9 @@ function openEncodingDialog(dialog: EncodingDialog) {
   }
 
   switch (dialog) {
+    case "bulkColumn":
+      isBulkColumnDialogOpen.value = true;
+      break;
     case "excelExport":
       isExcelExportDialogOpen.value = true;
       break;
@@ -1080,6 +1278,7 @@ function openEncodingDialog(dialog: EncodingDialog) {
 }
 
 function closeEncodingDialogs() {
+  isBulkColumnDialogOpen.value = false;
   isExcelExportDialogOpen.value = false;
   isExcelImportDialogOpen.value = false;
   isExportDialogOpen.value = false;
@@ -1094,6 +1293,7 @@ function closeEncodingDialogs() {
 function hasOpenEncodingDialog() {
   return (
     isExcelExportDialogOpen.value ||
+    isBulkColumnDialogOpen.value ||
     isExcelImportDialogOpen.value ||
     isExportDialogOpen.value ||
     isGoToRowDialogOpen.value ||
@@ -1802,6 +2002,7 @@ async function confirmImportText() {
       jsonPath.value = "";
     }
     selectedRowIds.value = new Set();
+    selectionAnchorRowId.value = null;
     pendingDeleteIndex.value = null;
     resetVirtualRowState();
     closeImportDialog();
@@ -1855,6 +2056,7 @@ async function confirmExcelImport() {
       jsonPath.value = "";
     }
     selectedRowIds.value = new Set();
+    selectionAnchorRowId.value = null;
     pendingDeleteIndex.value = null;
     resetVirtualRowState();
     closeExcelImportDialog();
@@ -2151,12 +2353,14 @@ async function clearRows() {
   if (!confirmed) return;
   rows.value = [];
   selectedRowIds.value = new Set();
+  selectionAnchorRowId.value = null;
   pendingDeleteIndex.value = null;
   resetVirtualRowState();
   statusMessage.value = t("message.encodingListCleared");
 }
 
 async function deleteSelectedRows() {
+  pruneSelectedRows(true);
   if (selectedRowIds.value.size === 0) {
     statusMessage.value = t("message.noRowsSelected");
     errorMessage.value = "";
@@ -2177,9 +2381,94 @@ async function deleteSelectedRows() {
   const idsToDelete = selectedRowIds.value;
   rows.value = rows.value.filter((row) => !idsToDelete.has(getRowIdentity(row)));
   selectedRowIds.value = new Set();
+  selectionAnchorRowId.value = null;
   pendingDeleteIndex.value = null;
   pruneVirtualRowState();
   statusMessage.value = `${t("message.deletedSelected")}: ${deleteCount} ${t("message.rows")}.`;
+}
+
+function spreadsheetCellText(value: string) {
+  if (!/[\t\r\n"]/.test(value)) return value;
+  return `"${value.replace(/"/g, "\"\"")}"`;
+}
+
+function selectedRowsSpreadsheetText() {
+  const selectedIds = selectedRowIds.value;
+  const copyColumns = displayedColumns.value
+    .filter((column) => column.key !== "row_number")
+    .map((column) => column.key as keyof EncodingRow);
+
+  return rows.value
+    .filter((row) => selectedIds.has(getRowIdentity(row)))
+    .map((row) => copyColumns.map((column) => spreadsheetCellText(row[column])).join("\t"))
+    .join("\n");
+}
+
+async function copySelectedRowsForSpreadsheet() {
+  pruneSelectedRows(true);
+  if (selectedRowIds.value.size === 0) {
+    statusMessage.value = t("message.noRowsSelected");
+    errorMessage.value = "";
+    return;
+  }
+
+  try {
+    await copyText(selectedRowsSpreadsheetText());
+    statusMessage.value = `${t("message.copiedSelectedRows")}: ${selectedRowIds.value.size}.`;
+    errorMessage.value = "";
+  } catch (error) {
+    errorMessage.value =
+      error instanceof Error ? error.message : t("message.failedCopySelectedRows");
+    statusMessage.value = "";
+  }
+}
+
+function openBulkColumnDialog() {
+  pruneSelectedRows(true);
+  if (selectedRowIds.value.size === 0) {
+    statusMessage.value = t("message.noRowsSelected");
+    errorMessage.value = "";
+    return;
+  }
+
+  if (!openEncodingDialog("bulkColumn")) return;
+  bulkColumnValue.value = "";
+}
+
+function closeBulkColumnDialog() {
+  isBulkColumnDialogOpen.value = false;
+}
+
+async function confirmBulkColumnChange() {
+  pruneSelectedRows(true);
+  const selectedIds = selectedRowIds.value;
+  if (selectedIds.size === 0) {
+    closeBulkColumnDialog();
+    return;
+  }
+
+  const columnKey = bulkColumnKey.value as keyof EncodingRow;
+  const confirmed = await confirm(
+    `${t("bulk.columnConfirmPrefix")} ${selectedIds.size} ${t("bulk.columnConfirmMiddle")} ${columnKey}${t("bulk.columnConfirmSuffix")}`,
+    {
+      title: t("bulk.columnTitle"),
+      kind: "warning",
+    },
+  );
+
+  if (!confirmed) return;
+
+  let changedCount = 0;
+  rows.value.forEach((row) => {
+    if (!selectedIds.has(getRowIdentity(row))) return;
+    changedCount += 1;
+    row[columnKey] = columnKey === "code" ? normalizeCode(bulkColumnValue.value) : bulkColumnValue.value;
+  });
+  rows.value = [...rows.value];
+  pruneSelectedRows(true);
+  closeBulkColumnDialog();
+  statusMessage.value = `${t("bulk.changedColumnPrefix")}: ${changedCount}; ${columnKey} = ${bulkColumnValue.value}.`;
+  errorMessage.value = "";
 }
 
 function toggleRowSelection(row: EncodingRow, checked: boolean) {
@@ -2189,6 +2478,32 @@ function toggleRowSelection(row: EncodingRow, checked: boolean) {
     nextSelectedIds.add(rowId);
   } else {
     nextSelectedIds.delete(rowId);
+  }
+  selectedRowIds.value = nextSelectedIds;
+}
+
+function toggleRowSelectionRange(row: EncodingRow, checked: boolean) {
+  const rowId = getRowIdentity(row);
+  const anchorId = selectionAnchorRowId.value;
+  const visibleRowIds = filteredRowIds.value;
+  const rowIndex = visibleRowIds.indexOf(rowId);
+  const anchorIndex = anchorId === null ? -1 : visibleRowIds.indexOf(anchorId);
+
+  if (rowIndex < 0 || anchorIndex < 0) {
+    toggleRowSelection(row, checked);
+    selectionAnchorRowId.value = rowId;
+    return;
+  }
+
+  const [start, end] =
+    rowIndex < anchorIndex ? [rowIndex, anchorIndex] : [anchorIndex, rowIndex];
+  const nextSelectedIds = new Set(selectedRowIds.value);
+  for (const visibleRowId of visibleRowIds.slice(start, end + 1)) {
+    if (checked) {
+      nextSelectedIds.add(visibleRowId);
+    } else {
+      nextSelectedIds.delete(visibleRowId);
+    }
   }
   selectedRowIds.value = nextSelectedIds;
 }
@@ -2203,6 +2518,20 @@ function toggleFilteredRowSelection(checked: boolean) {
     }
   }
   selectedRowIds.value = nextSelectedIds;
+  selectionAnchorRowId.value = null;
+}
+
+function selectAllFilteredRows() {
+  toggleFilteredRowSelection(true);
+  statusMessage.value = `${t("message.selectedFilteredRows")}: ${filteredRowIds.value.length}.`;
+  errorMessage.value = "";
+}
+
+function deselectAllRows() {
+  selectedRowIds.value = new Set();
+  selectionAnchorRowId.value = null;
+  statusMessage.value = t("message.deselectedAllRows");
+  errorMessage.value = "";
 }
 
 function handleFilteredSelectionChange(event?: Event) {
@@ -2210,17 +2539,51 @@ function handleFilteredSelectionChange(event?: Event) {
   toggleFilteredRowSelection(!isEveryFilteredRowSelected.value);
 }
 
-function handleRowSelectionChange(row: EncodingRow, event: Event) {
-  toggleRowSelection(row, (event.currentTarget as HTMLInputElement).checked);
+function applyRowSelection(row: EncodingRow, checked: boolean, shiftKey: boolean) {
+  if (shiftKey) {
+    toggleRowSelectionRange(row, checked);
+  } else {
+    toggleRowSelection(row, checked);
+  }
+  selectionAnchorRowId.value = getRowIdentity(row);
 }
 
-function pruneSelectedRows() {
+function handleRowSelectionChange(row: EncodingRow, event: MouseEvent) {
+  const input = event.currentTarget as HTMLInputElement;
+  applyRowSelection(row, input.checked, event.shiftKey);
+}
+
+function isInteractiveRowNumberTarget(event: MouseEvent) {
+  const target = event.target instanceof HTMLElement ? event.target : null;
+  return Boolean(target?.closest("button, input, select, textarea"));
+}
+
+function handleRowNumberCellMouseDown(event: MouseEvent) {
+  if (!isInteractiveRowNumberTarget(event)) {
+    event.preventDefault();
+  }
+}
+
+function handleRowNumberCellClick(row: EncodingRow, event: MouseEvent) {
+  if (isInteractiveRowNumberTarget(event)) return;
+
+  const rowId = getRowIdentity(row);
+  applyRowSelection(row, !selectedRowIds.value.has(rowId), event.shiftKey);
+}
+
+function pruneSelectedRows(forceRefresh = false) {
   const existingRowIds = new Set(rows.value.map((row) => getRowIdentity(row)));
   const nextSelectedIds = new Set(
     Array.from(selectedRowIds.value).filter((rowId) => existingRowIds.has(rowId)),
   );
-  if (nextSelectedIds.size !== selectedRowIds.value.size) {
+  if (forceRefresh || nextSelectedIds.size !== selectedRowIds.value.size) {
     selectedRowIds.value = nextSelectedIds;
+  }
+  if (
+    selectionAnchorRowId.value !== null &&
+    !existingRowIds.has(selectionAnchorRowId.value)
+  ) {
+    selectionAnchorRowId.value = null;
   }
 }
 
@@ -2660,6 +3023,16 @@ function normalizeFallbackMode(value: unknown): CjkFallbackMode {
     : "default";
 }
 
+function restoreBulkColumnKey(): BulkEditableColumn {
+  const storedColumn = window.localStorage.getItem(bulkColumnStorageKey);
+  const matchedColumn = bulkEditableColumns.find((column) => column.key === storedColumn);
+  return matchedColumn?.key ?? "original_char";
+}
+
+function persistBulkColumnKey() {
+  window.localStorage.setItem(bulkColumnStorageKey, bulkColumnKey.value);
+}
+
 function restoreThemeMode(): ThemeMode {
   const storedTheme = window.localStorage.getItem(themeStorageKey);
   return storedTheme === "system" || storedTheme === "dark" || storedTheme === "light"
@@ -3046,6 +3419,13 @@ function refreshDefaultCheckMessages() {
           >
             {{ t("main.deleteSelected") }} {{ selectedRowCount > 0 ? selectedRowCount : "" }}
           </button>
+          <button
+            type="button"
+            :disabled="selectedRowCount === 0"
+            @click="copySelectedRowsForSpreadsheet"
+          >
+            {{ t("main.copySelected") }} {{ selectedRowCount > 0 ? selectedRowCount : "" }}
+          </button>
         </div>
         <p class="encoding-file-status">{{ displayedJsonPath }}</p>
       </header>
@@ -3217,13 +3597,15 @@ function refreshDefaultCheckMessages() {
               v-if="column.key === 'row_number'"
               class="row-number-cell"
               :style="rowNumberStyle()"
+              @mousedown="handleRowNumberCellMouseDown"
+              @click="handleRowNumberCellClick(row, $event)"
             >
               <input
                 class="row-select-checkbox"
                 type="checkbox"
                 :aria-label="`Select row ${rowIndex + 1}`"
                 :checked="selectedRowIds.has(getRowIdentity(row))"
-                @change="handleRowSelectionChange(row, $event)"
+                @click="handleRowSelectionChange(row, $event)"
               />
               <div class="row-actions">
                 <template v-if="pendingDeleteIndex === rowIndex">
@@ -3297,6 +3679,16 @@ function refreshDefaultCheckMessages() {
       :max-row="rows.length"
       @close="closeGoToRowDialog"
       @confirm="confirmGoToRowDialog"
+    />
+
+    <BulkColumnDialog
+      v-if="isBulkColumnDialogOpen"
+      v-model:column="bulkColumnKey"
+      v-model:value="bulkColumnValue"
+      :columns="bulkEditableColumns"
+      :selected-count="selectedRowCount"
+      @close="closeBulkColumnDialog"
+      @confirm="confirmBulkColumnChange"
     />
 
     <LanguageDialog
@@ -4192,9 +4584,12 @@ button {
   gap: 6px;
   padding: 9px 10px;
   color: var(--muted);
+  cursor: pointer;
   font-size: 13px;
   line-height: 1.45;
   font-variant-numeric: tabular-nums;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .row-select-checkbox {

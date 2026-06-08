@@ -4,7 +4,7 @@ import { confirm, open as openDialog, save } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { setTheme as setAppTheme } from "@tauri-apps/api/app";
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { readFile, writeFile, writeTextFile } from "@tauri-apps/plugin-fs";
 import AiTranslationDialog, {
@@ -13,9 +13,12 @@ import AiTranslationDialog, {
 } from "./components/AiTranslationDialog.vue";
 import AiTranslationRunDialog from "./components/AiTranslationRunDialog.vue";
 import AiTranslationSessionDialog, {
+  type AiTranslationApplyMode,
+  type AiTranslationApplyTarget,
   type AiTranslationSession,
   type AiTranslationTask,
 } from "./components/AiTranslationSessionDialog.vue";
+import BulkColumnDialog from "./components/BulkColumnDialog.vue";
 import BulkStateDialog from "./components/BulkStateDialog.vue";
 import CharacterStatsDialog from "./components/CharacterStatsDialog.vue";
 import ExcelExportDialog from "./components/ExcelExportDialog.vue";
@@ -41,7 +44,9 @@ import {
   defaultColumnFontSizes,
   defaultColumnWidths,
   draftStorageKey,
+  encodingWindowSizeStorageKey,
   estimatedRowHeight,
+  mainWindowSizeStorageKey,
   maxHistorySteps,
   minColumnWidths,
   stateOptions,
@@ -118,17 +123,23 @@ const isLlmSettingsDialogOpen = ref(false);
 const isLanguageDialogOpen = ref(false);
 const isAiTranslationDialogOpen = ref(false);
 const isAiTranslationSessionDialogOpen = ref(false);
+const isBulkColumnDialogOpen = ref(false);
 const isBulkStateDialogOpen = ref(false);
 const isSearchOverlayOpen = ref(false);
 const llmSettingsStorageKey = "txtmgr.llmServerSettings.v1";
 const llmSettings = ref<LlmServerSettings>(restoreLlmSettings());
 const aiTranslationSettingsStorageKey = "txtmgr.aiTranslationSettings.v1";
 const aiTranslationSettings = ref<AiTranslationSettings>(restoreAiTranslationSettings());
+const bulkStateStorageKey = "txtmgr.bulkStateValue.v1";
+const bulkColumnStorageKey = "txtmgr.bulkColumnKey.v1";
 const aiTranslationSession = ref<AiTranslationSession | null>(null);
 const isPreparingAiTranslation = ref(false);
 const aiTranslationSessionMessage = ref(t("common.ready"));
 const selectedAiTranslationTaskIds = ref<Set<string>>(new Set());
+const aiTranslationApplyTarget = ref<AiTranslationApplyTarget>("translated_text");
+const aiTranslationApplyMode = ref<AiTranslationApplyMode>("overwrite");
 const updateAiTranslationStateOnApply = ref(true);
+const aiTranslationStateOnApply = ref<StateValue>("⭕️temp");
 const aiTranslationFinishedText = ref("");
 const aiTranslationCurrentText = ref("");
 const aiTranslationFinishedPreview = ref("");
@@ -163,7 +174,19 @@ const srtExportEncoding = ref<SrtExportEncoding>("utf-8");
 const srtExportBilingual = ref(false);
 const srtExportFilteredOnly = ref(false);
 const selectedRowIds = ref<Set<number>>(new Set());
-const bulkStateValue = ref<StateValue>("❓unmarked");
+const selectionAnchorRowId = ref<number | null>(null);
+type MainBulkEditableColumn = Exclude<keyof SentenceRow, "state">;
+const bulkEditableColumns: { key: MainBulkEditableColumn; label: string }[] = [
+  { key: "title_addr", label: "title_addr" },
+  { key: "original_text", label: "original_text" },
+  { key: "translated_text", label: "translated_text" },
+  { key: "note", label: "note" },
+  { key: "file_name", label: "file_name" },
+  { key: "ai_output", label: "ai_output" },
+];
+const bulkColumnKey = ref<MainBulkEditableColumn>(restoreBulkColumnKey());
+const bulkColumnValue = ref("");
+const bulkStateValue = ref<StateValue>(restoreBulkStateValue());
 const characterStatsScope = ref<"all" | "filtered" | "selected">("filtered");
 const characterStatsIncludeAll = ref(true);
 const characterStatsTypes = ref<
@@ -207,6 +230,7 @@ let unlistenOpenGoToRow: UnlistenFn | undefined;
 let unlistenReadJson: UnlistenFn | undefined;
 let unlistenSaveJson: UnlistenFn | undefined;
 let unlistenSaveJsonAs: UnlistenFn | undefined;
+let unlistenOpenSearchPanel: UnlistenFn | undefined;
 let unlistenImportExcel: UnlistenFn | undefined;
 let unlistenExportExcel: UnlistenFn | undefined;
 let unlistenImportSrt: UnlistenFn | undefined;
@@ -221,11 +245,17 @@ let unlistenUndoTableChange: UnlistenFn | undefined;
 let unlistenRedoTableChange: UnlistenFn | undefined;
 let unlistenClearList: UnlistenFn | undefined;
 let unlistenDeleteSelected: UnlistenFn | undefined;
+let unlistenCopySelected: UnlistenFn | undefined;
+let unlistenSelectAllFiltered: UnlistenFn | undefined;
+let unlistenDeselectAllRows: UnlistenFn | undefined;
 let unlistenBulkState: UnlistenFn | undefined;
+let unlistenBulkColumn: UnlistenFn | undefined;
 let unlistenToggleMainColumnVisibility: UnlistenFn | undefined;
 let unlistenToggleMainTopPanel: UnlistenFn | undefined;
+let unlistenMainWindowResize: UnlistenFn | undefined;
 let pendingEditSnapshot: string | null = null;
 let columnDragTimer: number | undefined;
+let windowSizeSaveTimer: number | undefined;
 let draggedColumnKey: ColumnKey | null = null;
 let activeColumnDragElement: HTMLElement | null = null;
 let lastColumnPointerX = 0;
@@ -238,6 +268,11 @@ const rowElements = new Map<number, HTMLElement>();
 // selection/filter bookkeeping stable without mutating imported row data.
 const rowIdentities = new WeakMap<SentenceRow, number>();
 const appWindow = getCurrentWindow();
+void restoreWindowSize(appWindow, mainWindowSizeStorageKey, 1024, 640);
+void registerWindowSizePersistence(appWindow, mainWindowSizeStorageKey, (unlisten) => {
+  unlistenMainWindowResize = unlisten;
+});
+window.addEventListener("resize", handleBrowserWindowResize);
 const systemThemeQuery = window.matchMedia("(prefers-color-scheme: dark)");
 const systemThemeMode = ref<"light" | "dark">(getSystemThemeMode());
 const tableEndSpacerWidth = 24;
@@ -494,6 +529,14 @@ watch(themeMode, () => {
   void syncNativeChrome();
 });
 
+watch(bulkStateValue, () => {
+  persistBulkStateValue();
+});
+
+watch(bulkColumnKey, () => {
+  persistBulkColumnKey();
+});
+
 watch(isTopPanelVisible, () => {
   persistTopPanelVisible();
   nextTick(() => {
@@ -575,6 +618,7 @@ watch(renderedRows, () => {
 
 onBeforeUnmount(() => {
   cancelColumnReorder();
+  window.clearTimeout(windowSizeSaveTimer);
   rowResizeObservers.forEach((observer) => observer.disconnect());
   rowResizeObservers.clear();
   rowElements.clear();
@@ -582,6 +626,7 @@ onBeforeUnmount(() => {
   unlistenReadJson?.();
   unlistenSaveJson?.();
   unlistenSaveJsonAs?.();
+  unlistenOpenSearchPanel?.();
   unlistenImportExcel?.();
   unlistenExportExcel?.();
   unlistenImportSrt?.();
@@ -596,9 +641,15 @@ onBeforeUnmount(() => {
   unlistenRedoTableChange?.();
   unlistenClearList?.();
   unlistenDeleteSelected?.();
+  unlistenCopySelected?.();
+  unlistenSelectAllFiltered?.();
+  unlistenDeselectAllRows?.();
   unlistenBulkState?.();
+  unlistenBulkColumn?.();
   unlistenToggleMainColumnVisibility?.();
   unlistenToggleMainTopPanel?.();
+  unlistenMainWindowResize?.();
+  window.removeEventListener("resize", handleBrowserWindowResize);
   window.removeEventListener("focus", handleWindowFocus);
   window.removeEventListener("keydown", handleGlobalShortcut);
   window.removeEventListener("keydown", handleWindowsMenuShortcut);
@@ -671,6 +722,107 @@ function closeSearchOverlay() {
   isSearchOverlayOpen.value = false;
 }
 
+type StoredWindowSize = {
+  height: number;
+  width: number;
+};
+
+function restoreWindowSizePreference(
+  storageKey: string,
+  minWidth: number,
+  minHeight: number,
+): StoredWindowSize | null {
+  try {
+    const rawSize = window.localStorage.getItem(storageKey);
+    if (!rawSize) return null;
+    const parsed = JSON.parse(rawSize) as Partial<StoredWindowSize>;
+    const width = Number(parsed.width);
+    const height = Number(parsed.height);
+    if (!Number.isFinite(width) || !Number.isFinite(height)) return null;
+    return {
+      height: Math.max(minHeight, Math.round(height)),
+      width: Math.max(minWidth, Math.round(width)),
+    };
+  } catch {
+    window.localStorage.removeItem(storageKey);
+    return null;
+  }
+}
+
+async function restoreWindowSize(
+  targetWindow: ReturnType<typeof getCurrentWindow>,
+  storageKey: string,
+  minWidth: number,
+  minHeight: number,
+) {
+  const restoredSize = restoreWindowSizePreference(storageKey, minWidth, minHeight);
+  if (!restoredSize) return;
+  try {
+    const size = new LogicalSize(restoredSize.width, restoredSize.height);
+    await nextTick();
+    await targetWindow.setSize(size);
+    window.requestAnimationFrame(() => {
+      void targetWindow.setSize(size);
+    });
+    window.setTimeout(() => {
+      void targetWindow.setSize(size);
+    }, 100);
+  } catch (error) {
+    console.warn("Failed to restore window size.", error);
+  }
+}
+
+async function persistWindowSize(
+  targetWindow: ReturnType<typeof getCurrentWindow>,
+  storageKey: string,
+) {
+  try {
+    const [physicalSize, scaleFactor] = await Promise.all([
+      targetWindow.innerSize(),
+      targetWindow.scaleFactor(),
+    ]);
+    const logicalSize = physicalSize.toLogical(scaleFactor);
+    window.localStorage.setItem(
+      storageKey,
+      JSON.stringify({
+        height: Math.round(logicalSize.height),
+        width: Math.round(logicalSize.width),
+      }),
+    );
+  } catch (error) {
+    console.warn("Failed to persist window size.", error);
+  }
+}
+
+async function registerWindowSizePersistence(
+  targetWindow: ReturnType<typeof getCurrentWindow>,
+  storageKey: string,
+  setUnlisten: (unlisten: UnlistenFn) => void,
+) {
+  try {
+    const unlisten = await targetWindow.onResized(() => {
+      window.clearTimeout(windowSizeSaveTimer);
+      windowSizeSaveTimer = window.setTimeout(() => {
+        void persistWindowSize(targetWindow, storageKey);
+      }, 250);
+    });
+    setUnlisten(unlisten);
+  } catch (error) {
+    console.warn("Failed to register window size listener.", error);
+  }
+}
+
+function queuePersistCurrentWindowSize() {
+  window.clearTimeout(windowSizeSaveTimer);
+  windowSizeSaveTimer = window.setTimeout(() => {
+    void persistWindowSize(appWindow, mainWindowSizeStorageKey);
+  }, 250);
+}
+
+function handleBrowserWindowResize() {
+  queuePersistCurrentWindowSize();
+}
+
 async function openEncodingManagerWindow() {
   try {
     if (!isLinuxPlatform() && !isWindowsPlatform()) {
@@ -684,11 +836,16 @@ async function openEncodingManagerWindow() {
       return;
     }
 
+    const restoredSize = restoreWindowSizePreference(
+      encodingWindowSizeStorageKey,
+      560,
+      640,
+    );
     const encodingWindow = new WebviewWindow("encoding", {
       title: "Encoding Manager",
       url: "index.html#/encoding",
-      width: 760,
-      height: 860,
+      width: restoredSize?.width ?? 760,
+      height: restoredSize?.height ?? 860,
       center: true,
       focus: true,
       visible: true,
@@ -731,7 +888,11 @@ function handleWindowsMenuShortcut(event: KeyboardEvent) {
     { action: "ai_translation", run: () => openAiTranslationDialog() },
     { action: "clear_list", run: () => void clearRows() },
     { action: "delete_selected", run: () => void deleteSelectedRows() },
+    { action: "copy_selected", run: () => void copySelectedRowsForSpreadsheet() },
+    { action: "select_all_filtered", run: () => selectAllFilteredRows() },
+    { action: "deselect_all_rows", run: () => deselectAllRows() },
     { action: "bulk_change_state", run: () => openBulkStateDialog() },
+    { action: "bulk_change_column", run: () => openBulkColumnDialog() },
     { action: "character_stats", run: () => openCharacterStatsDialog() },
     { action: "language_en", run: () => setAppLanguage("en") },
     { action: "language_zh_hans", run: () => setAppLanguage("zh-Hans") },
@@ -783,6 +944,17 @@ function registerMenuListeners() {
     })
     .catch((error) => {
       console.warn("Failed to register save JSON as menu listener.", error);
+    });
+
+  listen("open-search-panel", () => {
+    if (hasOpenMainDialog()) return;
+    openSearchOverlay();
+  })
+    .then((unlisten) => {
+      unlistenOpenSearchPanel = unlisten;
+    })
+    .catch((error) => {
+      console.warn("Failed to register search panel menu listener.", error);
     });
 
   listen("import-excel", () => {
@@ -926,6 +1098,36 @@ function registerMenuListeners() {
       console.warn("Failed to register delete selected menu listener.", error);
     });
 
+  listen("copy-selected", () => {
+    void copySelectedRowsForSpreadsheet();
+  })
+    .then((unlisten) => {
+      unlistenCopySelected = unlisten;
+    })
+    .catch((error) => {
+      console.warn("Failed to register copy selected menu listener.", error);
+    });
+
+  listen("select-all-filtered", () => {
+    selectAllFilteredRows();
+  })
+    .then((unlisten) => {
+      unlistenSelectAllFiltered = unlisten;
+    })
+    .catch((error) => {
+      console.warn("Failed to register select all filtered menu listener.", error);
+    });
+
+  listen("deselect-all-rows", () => {
+    deselectAllRows();
+  })
+    .then((unlisten) => {
+      unlistenDeselectAllRows = unlisten;
+    })
+    .catch((error) => {
+      console.warn("Failed to register deselect all rows menu listener.", error);
+    });
+
   listen("bulk-change-state", () => {
     openBulkStateDialog();
   })
@@ -934,6 +1136,16 @@ function registerMenuListeners() {
     })
     .catch((error) => {
       console.warn("Failed to register bulk state menu listener.", error);
+    });
+
+  listen("bulk-change-column", () => {
+    openBulkColumnDialog();
+  })
+    .then((unlisten) => {
+      unlistenBulkColumn = unlisten;
+    })
+    .catch((error) => {
+      console.warn("Failed to register bulk column menu listener.", error);
     });
 
   listen<string>("toggle-main-column-visibility", (event) => {
@@ -960,6 +1172,7 @@ function registerMenuListeners() {
 type MainDialog =
   | "aiTranslation"
   | "aiTranslationSession"
+  | "bulkColumn"
   | "bulkState"
   | "characterStats"
   | "excelExport"
@@ -996,6 +1209,9 @@ function openMainDialog(dialog: MainDialog) {
     case "aiTranslationSession":
       isAiTranslationSessionDialogOpen.value = true;
       break;
+    case "bulkColumn":
+      isBulkColumnDialogOpen.value = true;
+      break;
     case "bulkState":
       isBulkStateDialogOpen.value = true;
       break;
@@ -1031,6 +1247,7 @@ function openMainDialog(dialog: MainDialog) {
 function closeMainDialogs() {
   isAiTranslationDialogOpen.value = false;
   isAiTranslationSessionDialogOpen.value = false;
+  isBulkColumnDialogOpen.value = false;
   isBulkStateDialogOpen.value = false;
   isCharacterStatsDialogOpen.value = false;
   isExcelExportDialogOpen.value = false;
@@ -1046,6 +1263,7 @@ function hasOpenMainDialog() {
   return (
     isAiTranslationDialogOpen.value ||
     isAiTranslationSessionDialogOpen.value ||
+    isBulkColumnDialogOpen.value ||
     isBulkStateDialogOpen.value ||
     isCharacterStatsDialogOpen.value ||
     isExcelExportDialogOpen.value ||
@@ -1167,12 +1385,43 @@ function toggleAiTranslationTaskSelection(taskId: string) {
   selectedAiTranslationTaskIds.value = nextSelectedIds;
 }
 
+function isSelectableAiTranslationTask(task: AiTranslationTask) {
+  return (
+    task.status === "done" ||
+    task.status === "warning" ||
+    task.status === "applied" ||
+    task.status === "applied_translated" ||
+    task.status === "applied_ai_output" ||
+    task.status === "applied_note" ||
+    task.status === "applied_both"
+  );
+}
+
+function taskAppliedTargets(task: AiTranslationTask) {
+  if (task.appliedTargets && task.appliedTargets.length > 0) return task.appliedTargets;
+  if (task.status === "applied_translated") return ["translated_text"] as AiTranslationApplyTarget[];
+  if (task.status === "applied_ai_output") return ["ai_output"] as AiTranslationApplyTarget[];
+  if (task.status === "applied_note") return ["note"] as AiTranslationApplyTarget[];
+  if (task.status === "applied_both") {
+    return ["translated_text", "ai_output"] as AiTranslationApplyTarget[];
+  }
+  return [] as AiTranslationApplyTarget[];
+}
+
+function nextAiTranslationTaskStatus(targets: AiTranslationApplyTarget[]): AiTranslationTask["status"] {
+  if (targets.length > 1) return "applied";
+  if (targets[0] === "translated_text") return "applied_translated";
+  if (targets[0] === "ai_output") return "applied_ai_output";
+  if (targets[0] === "note") return "applied_note";
+  return "applied";
+}
+
 function selectAllAiTranslationResults() {
   const result = aiTranslationSession.value;
   if (!result) return;
 
   const selectableIds = result.tasks
-    .filter((task) => task.status === "done" || task.status === "warning")
+    .filter((task) => isSelectableAiTranslationTask(task))
     .map((task) => task.id);
   const selectedIds = selectedAiTranslationTaskIds.value;
   const allSelected =
@@ -1182,11 +1431,7 @@ function selectAllAiTranslationResults() {
 }
 
 function applySelectedAiTranslationResults() {
-  applySelectedAiTranslationResultsTo("translated");
-}
-
-function applySelectedAiTranslationResultsToAiOutput() {
-  applySelectedAiTranslationResultsTo("ai_output");
+  applySelectedAiTranslationResultsWithOptions();
 }
 
 function appendNoteText(existingNote: string, text: string) {
@@ -1196,34 +1441,45 @@ function appendNoteText(existingNote: string, text: string) {
   return trimmedExisting === "" ? trimmedText : `${existingNote}\n${trimmedText}`;
 }
 
-function applySelectedAiTranslationResultsTo(target: "translated" | "ai_output") {
+function applyTextToRowTarget(
+  row: SentenceRow,
+  target: AiTranslationApplyTarget,
+  mode: AiTranslationApplyMode,
+  text: string,
+) {
+  if (mode === "append") {
+    row[target] = appendNoteText(row[target], text);
+    return;
+  }
+  row[target] = text;
+}
+
+function applySelectedAiTranslationResultsWithOptions() {
   const result = aiTranslationSession.value;
   if (!result || selectedAiTranslationTaskIds.value.size === 0) return;
 
   const selectedIds = selectedAiTranslationTaskIds.value;
   const nextRows = rows.value.map((row) => ({ ...row }));
+  const target = aiTranslationApplyTarget.value;
+  const applyMode = aiTranslationApplyMode.value;
   let appliedCount = 0;
 
   const nextTasks = result.tasks.map((task) => {
     if (!selectedIds.has(task.id)) return task;
-    if (task.status !== "done" && task.status !== "warning") return task;
+    if (!isSelectableAiTranslationTask(task)) return task;
     const row = nextRows[task.rowIndex];
     if (!row) return task;
 
-    if (target === "translated") {
-      row.translated_text = task.candidateTranslation;
-      row.note = appendNoteText(row.note, task.candidateNote);
-    } else {
-      row.ai_output = appendNoteText(row.ai_output, task.candidateTranslation);
-      row.ai_output = appendNoteText(row.ai_output, task.candidateNote);
-    }
+    applyTextToRowTarget(row, target, applyMode, task.candidateTranslation);
     if (updateAiTranslationStateOnApply.value) {
-      row.state = "⭕️temp";
+      row.state = aiTranslationStateOnApply.value;
     }
+    const appliedTargets = Array.from(new Set([...taskAppliedTargets(task), target]));
     appliedCount += 1;
     return {
       ...task,
-      status: "applied" as const,
+      appliedTargets,
+      status: nextAiTranslationTaskStatus(appliedTargets),
       message: t("ai.appliedToTable"),
     };
   });
@@ -1239,16 +1495,11 @@ function applySelectedAiTranslationResultsTo(target: "translated" | "ai_output")
     ...result,
     tasks: nextTasks,
   };
-  selectedAiTranslationTaskIds.value = new Set();
   markStatSnapshotDirty();
-  const appliedMessage =
-    target === "translated"
-      ? updateAiTranslationStateOnApply.value
-        ? t("ai.appliedResultsAndTemp")
-        : t("ai.appliedResults")
-      : updateAiTranslationStateOnApply.value
-        ? t("ai.appliedResultsToAiOutputAndTemp")
-        : t("ai.appliedResultsToAiOutput");
+  const appliedTargetMessage = `${t("ai.appliedResultsToTarget")} ${target}`;
+  const appliedMessage = updateAiTranslationStateOnApply.value
+    ? `${appliedTargetMessage}; ${t("ai.setStateTo")} ${aiTranslationStateOnApply.value}`
+    : appliedTargetMessage;
   aiTranslationSessionMessage.value = `${appliedMessage}: ${appliedCount}.`;
   statusMessage.value = aiTranslationSessionMessage.value;
   errorMessage.value = "";
@@ -2746,6 +2997,7 @@ async function clearRows() {
 }
 
 async function deleteSelectedRows() {
+  pruneSelectedRows(true);
   if (selectedRowIds.value.size === 0) return;
   if (isDeleteSelectedConfirmOpen.value) return;
 
@@ -2773,7 +3025,44 @@ async function deleteSelectedRows() {
   statusMessage.value = `${t("message.deletedSelected")}: ${deleteCount} ${t("message.rows")}.`;
 }
 
+function spreadsheetCellText(value: string) {
+  if (!/[\t\r\n"]/.test(value)) return value;
+  return `"${value.replace(/"/g, "\"\"")}"`;
+}
+
+function selectedRowsSpreadsheetText() {
+  const selectedIds = selectedRowIds.value;
+  const copyColumns = displayedColumns.value
+    .filter((column) => column.key !== "row_number")
+    .map((column) => column.key as keyof SentenceRow);
+
+  return rows.value
+    .filter((row) => selectedIds.has(getRowIdentity(row)))
+    .map((row) => copyColumns.map((column) => spreadsheetCellText(row[column])).join("\t"))
+    .join("\n");
+}
+
+async function copySelectedRowsForSpreadsheet() {
+  pruneSelectedRows(true);
+  if (selectedRowIds.value.size === 0) {
+    statusMessage.value = t("message.noRowsSelected");
+    errorMessage.value = "";
+    return;
+  }
+
+  try {
+    await copyText(selectedRowsSpreadsheetText());
+    statusMessage.value = `${t("message.copiedSelectedRows")}: ${selectedRowIds.value.size}.`;
+    errorMessage.value = "";
+  } catch (error) {
+    errorMessage.value =
+      error instanceof Error ? error.message : t("message.failedCopySelectedRows");
+    statusMessage.value = "";
+  }
+}
+
 function openBulkStateDialog() {
+  pruneSelectedRows(true);
   if (selectedRowIds.value.size === 0) {
     statusMessage.value = t("message.noRowsSelected");
     errorMessage.value = "";
@@ -2781,7 +3070,54 @@ function openBulkStateDialog() {
   }
 
   if (!openMainDialog("bulkState")) return;
-  bulkStateValue.value = "⭕️temp";
+}
+
+function openBulkColumnDialog() {
+  pruneSelectedRows(true);
+  if (selectedRowIds.value.size === 0) {
+    statusMessage.value = t("message.noRowsSelected");
+    errorMessage.value = "";
+    return;
+  }
+
+  if (!openMainDialog("bulkColumn")) return;
+  bulkColumnValue.value = "";
+}
+
+function closeBulkColumnDialog() {
+  isBulkColumnDialogOpen.value = false;
+}
+
+async function confirmBulkColumnChange() {
+  const selectedIds = selectedRowIds.value;
+  if (selectedIds.size === 0) {
+    closeBulkColumnDialog();
+    return;
+  }
+
+  const confirmed = await confirm(
+    `${t("bulk.columnConfirmPrefix")} ${selectedIds.size} ${t("bulk.columnConfirmMiddle")} ${bulkColumnKey.value}${t("bulk.columnConfirmSuffix")}`,
+    {
+      title: t("bulk.columnTitle"),
+      kind: "warning",
+    },
+  );
+
+  if (!confirmed) return;
+
+  recordCurrentStateForUndo();
+  let changedCount = 0;
+  rows.value.forEach((row) => {
+    if (!selectedIds.has(getRowIdentity(row))) return;
+    changedCount += 1;
+    row[bulkColumnKey.value] = bulkColumnValue.value;
+  });
+  rows.value = [...rows.value];
+  pruneSelectedRows(true);
+  markStatSnapshotDirty();
+  closeBulkColumnDialog();
+  statusMessage.value = `${t("bulk.changedColumnPrefix")}: ${changedCount}; ${bulkColumnKey.value} = ${bulkColumnValue.value}.`;
+  errorMessage.value = "";
 }
 
 function closeBulkStateDialog() {
@@ -2797,14 +3133,13 @@ function confirmBulkStateChange() {
 
   recordCurrentStateForUndo();
   let changedCount = 0;
-  rows.value = rows.value.map((row) => {
-    if (!selectedIds.has(getRowIdentity(row))) return row;
+  rows.value.forEach((row) => {
+    if (!selectedIds.has(getRowIdentity(row))) return;
     changedCount += 1;
-    return {
-      ...row,
-      state: bulkStateValue.value,
-    };
+    row.state = bulkStateValue.value;
   });
+  rows.value = [...rows.value];
+  pruneSelectedRows(true);
   markStatSnapshotDirty();
   closeBulkStateDialog();
   statusMessage.value = `${t("message.changedSelectedRowsToPrefix")}: ${changedCount}; ${t("message.changedSelectedRowsToSuffix")} ${bulkStateValue.value}.`;
@@ -2845,8 +3180,62 @@ function toggleRowSelection(row: SentenceRow, checked: boolean) {
   selectedRowIds.value = nextSelectedIds;
 }
 
-function handleRowSelectionChange(row: SentenceRow, event: Event) {
-  toggleRowSelection(row, (event.currentTarget as HTMLInputElement).checked);
+function toggleRowSelectionRange(row: SentenceRow, checked: boolean) {
+  const rowId = getRowIdentity(row);
+  const anchorId = selectionAnchorRowId.value;
+  const visibleRowIds = filteredRowIds.value;
+  const rowIndex = visibleRowIds.indexOf(rowId);
+  const anchorIndex = anchorId === null ? -1 : visibleRowIds.indexOf(anchorId);
+
+  if (rowIndex < 0 || anchorIndex < 0) {
+    toggleRowSelection(row, checked);
+    selectionAnchorRowId.value = rowId;
+    return;
+  }
+
+  const [start, end] =
+    rowIndex < anchorIndex ? [rowIndex, anchorIndex] : [anchorIndex, rowIndex];
+  const nextSelectedIds = new Set(selectedRowIds.value);
+  for (const visibleRowId of visibleRowIds.slice(start, end + 1)) {
+    if (checked) {
+      nextSelectedIds.add(visibleRowId);
+    } else {
+      nextSelectedIds.delete(visibleRowId);
+    }
+  }
+  selectedRowIds.value = nextSelectedIds;
+}
+
+function applyRowSelection(row: SentenceRow, checked: boolean, shiftKey: boolean) {
+  if (shiftKey) {
+    toggleRowSelectionRange(row, checked);
+  } else {
+    toggleRowSelection(row, checked);
+  }
+  selectionAnchorRowId.value = getRowIdentity(row);
+}
+
+function handleRowSelectionChange(row: SentenceRow, event: MouseEvent) {
+  const input = event.currentTarget as HTMLInputElement;
+  applyRowSelection(row, input.checked, event.shiftKey);
+}
+
+function isInteractiveRowNumberTarget(event: MouseEvent) {
+  const target = event.target instanceof HTMLElement ? event.target : null;
+  return Boolean(target?.closest("button, input, select, textarea"));
+}
+
+function handleRowNumberCellMouseDown(event: MouseEvent) {
+  if (!isInteractiveRowNumberTarget(event)) {
+    event.preventDefault();
+  }
+}
+
+function handleRowNumberCellClick(row: SentenceRow, event: MouseEvent) {
+  if (isInteractiveRowNumberTarget(event)) return;
+
+  const rowId = getRowIdentity(row);
+  applyRowSelection(row, !selectedRowIds.value.has(rowId), event.shiftKey);
 }
 
 function toggleFilteredRowSelection(checked: boolean) {
@@ -2861,6 +3250,19 @@ function toggleFilteredRowSelection(checked: boolean) {
   }
 
   selectedRowIds.value = nextSelectedIds;
+  selectionAnchorRowId.value = null;
+}
+
+function selectAllFilteredRows() {
+  toggleFilteredRowSelection(true);
+  statusMessage.value = `${t("message.selectedFilteredRows")}: ${filteredRowIds.value.length}.`;
+  errorMessage.value = "";
+}
+
+function deselectAllRows() {
+  clearSelectedRows();
+  statusMessage.value = t("message.deselectedAllRows");
+  errorMessage.value = "";
 }
 
 function handleFilteredSelectionChange(event?: Event) {
@@ -2870,16 +3272,23 @@ function handleFilteredSelectionChange(event?: Event) {
 
 function clearSelectedRows() {
   selectedRowIds.value = new Set();
+  selectionAnchorRowId.value = null;
 }
 
-function pruneSelectedRows() {
+function pruneSelectedRows(forceRefresh = false) {
   const existingRowIds = new Set(rows.value.map((row) => getRowIdentity(row)));
   const nextSelectedIds = new Set(
     Array.from(selectedRowIds.value).filter((rowId) => existingRowIds.has(rowId)),
   );
 
-  if (nextSelectedIds.size !== selectedRowIds.value.size) {
+  if (forceRefresh || nextSelectedIds.size !== selectedRowIds.value.size) {
     selectedRowIds.value = nextSelectedIds;
+  }
+  if (
+    selectionAnchorRowId.value !== null &&
+    !existingRowIds.has(selectionAnchorRowId.value)
+  ) {
+    selectionAnchorRowId.value = null;
   }
 }
 
@@ -3293,6 +3702,26 @@ function persistAiTranslationSettings() {
     aiTranslationSettingsStorageKey,
     JSON.stringify(aiTranslationSettings.value),
   );
+}
+
+function restoreBulkStateValue(): StateValue {
+  const storedState = window.localStorage.getItem(bulkStateStorageKey);
+  const matchedState = stateOptions.find((state) => state === storedState);
+  return matchedState ?? "⭕️temp";
+}
+
+function persistBulkStateValue() {
+  window.localStorage.setItem(bulkStateStorageKey, bulkStateValue.value);
+}
+
+function restoreBulkColumnKey(): MainBulkEditableColumn {
+  const storedColumn = window.localStorage.getItem(bulkColumnStorageKey);
+  const matchedColumn = bulkEditableColumns.find((column) => column.key === storedColumn);
+  return matchedColumn?.key ?? "translated_text";
+}
+
+function persistBulkColumnKey() {
+  window.localStorage.setItem(bulkColumnStorageKey, bulkColumnKey.value);
 }
 
 function sanitizeLlmSettings(value: unknown): LlmServerSettings {
@@ -4032,6 +4461,13 @@ function startResize(columnIndex: number, event: PointerEvent) {
             >
               {{ t("main.deleteSelected") }} {{ selectedRowCount > 0 ? selectedRowCount : "" }}
             </button>
+            <button
+              type="button"
+              :disabled="selectedRowCount === 0"
+              @click="copySelectedRowsForSpreadsheet"
+            >
+              {{ t("main.copySelected") }} {{ selectedRowCount > 0 ? selectedRowCount : "" }}
+            </button>
           </div>
           <p class="file-status">
             {{
@@ -4275,13 +4711,15 @@ function startResize(columnIndex: number, event: PointerEvent) {
               v-if="column.key === 'row_number'"
               class="row-number-cell"
               :style="columnFontStyle(columnIndexByKey(column.key))"
+              @mousedown="handleRowNumberCellMouseDown"
+              @click="handleRowNumberCellClick(row, $event)"
             >
               <input
                 class="row-select-checkbox"
                 type="checkbox"
                 :aria-label="`Select row ${rowIndex + 1}`"
                 :checked="selectedRowIds.has(getRowIdentity(row))"
-                @change="handleRowSelectionChange(row, $event)"
+                @click="handleRowSelectionChange(row, $event)"
               />
               <div class="row-actions">
                 <template v-if="pendingDeleteIndex === rowIndex">
@@ -4471,16 +4909,22 @@ function startResize(columnIndex: number, event: PointerEvent) {
 
     <AiTranslationSessionDialog
       v-if="isAiTranslationSessionDialogOpen && aiTranslationSession"
+      :apply-mode="aiTranslationApplyMode"
+      :apply-target="aiTranslationApplyTarget"
       :message="aiTranslationSessionMessage"
       :selected-task-ids="Array.from(selectedAiTranslationTaskIds)"
       :session="aiTranslationSession"
+      :state-on-apply="aiTranslationStateOnApply"
+      :state-options="stateOptions"
       :update-state-on-apply="updateAiTranslationStateOnApply"
       @apply-selected="applySelectedAiTranslationResults"
-      @apply-selected-to-ai-output="applySelectedAiTranslationResultsToAiOutput"
       @close="closeAiTranslationSessionDialog"
       @discard="discardAiTranslationSession"
       @select-all="selectAllAiTranslationResults"
       @toggle-task="toggleAiTranslationTaskSelection"
+      @update-apply-mode="aiTranslationApplyMode = $event"
+      @update-apply-target="aiTranslationApplyTarget = $event"
+      @update-state-on-apply-value="aiTranslationStateOnApply = $event"
       @update-state-on-apply="updateAiTranslationStateOnApply = $event"
     />
 
@@ -4491,6 +4935,16 @@ function startResize(columnIndex: number, event: PointerEvent) {
       :state-options="stateOptions"
       @close="closeBulkStateDialog"
       @confirm="confirmBulkStateChange"
+    />
+
+    <BulkColumnDialog
+      v-if="isBulkColumnDialogOpen"
+      v-model:column="bulkColumnKey"
+      v-model:value="bulkColumnValue"
+      :columns="bulkEditableColumns"
+      :selected-count="selectedRowCount"
+      @close="closeBulkColumnDialog"
+      @confirm="confirmBulkColumnChange"
     />
 
     <ExcelImportDialog
@@ -5633,9 +6087,12 @@ button {
   gap: 6px;
   padding: 9px 10px;
   color: var(--muted);
+  cursor: pointer;
   font-size: 13px;
   line-height: 1.45;
   font-variant-numeric: tabular-nums;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .row-actions {
