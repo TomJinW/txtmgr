@@ -75,12 +75,22 @@ watch(
           />
         </label>
         <label>
-          <span>{{ t("dialog.charColumnRequired") }}</span>
-          <input v-model="charColumn" type="text" inputmode="numeric" required />
+          <span>{{ t("dialog.charColumnOptional") }}</span>
+          <input
+            v-model="charColumn"
+            type="text"
+            inputmode="numeric"
+            :placeholder="t('dialog.optional')"
+          />
         </label>
         <label>
-          <span>{{ t("dialog.codeColumnRequired") }}</span>
-          <input v-model="codeColumn" type="text" inputmode="numeric" required />
+          <span>{{ t("dialog.codeColumnOptional") }}</span>
+          <input
+            v-model="codeColumn"
+            type="text"
+            inputmode="numeric"
+            :placeholder="t('dialog.optional')"
+          />
         </label>
         <label>
           <span>{{ t("dialog.widthColumnOptional") }}</span>

@@ -616,10 +616,18 @@ const canImportText = computed(
 const canImportExcel = computed(
   () =>
     excelImportPath.value.trim() !== "" &&
-    String(excelImportCharColumn.value).trim() !== "" &&
-    String(excelImportCodeColumn.value).trim() !== "" &&
+    hasExcelImportColumnMapping() &&
     !isImportingExcel.value,
 );
+
+function hasExcelImportColumnMapping() {
+  return (
+    String(excelImportCharColumn.value).trim() !== "" ||
+    String(excelImportCodeColumn.value).trim() !== "" ||
+    String(excelImportWidthColumn.value).trim() !== "" ||
+    String(excelImportNoteColumn.value).trim() !== ""
+  );
+}
 
 const canSaveJson = computed(() => rows.value.length > 0 && !isSavingJson.value);
 
@@ -1904,14 +1912,14 @@ async function runCharacterStats() {
   const encodingRows = encodingRowsForCharacterStats();
   const textRows = textRowsForCharacterStats();
   const targetTokens = new Set<string>();
-  const counts = new Map<string, number>();
+  const counts = new Map<string, { count: number; rowNumbers: Set<number> }>();
 
   try {
     for (let rowIndex = 0; rowIndex < encodingRows.length; rowIndex += 1) {
       const row = encodingRows[rowIndex];
       for (const token of encodingCharacterStatsTokens(row.original_char)) {
         targetTokens.add(token);
-        counts.set(token, 0);
+        counts.set(token, { count: 0, rowNumbers: new Set() });
       }
 
       if (rowIndex % 240 === 0 || rowIndex === encodingRows.length - 1) {
@@ -1927,7 +1935,10 @@ async function runCharacterStats() {
       const row = textRows[rowIndex];
       for (const token of encodingCharacterStatsTokens(row.translated_text)) {
         if (!targetTokens.has(token)) continue;
-        counts.set(token, (counts.get(token) ?? 0) + 1);
+        const item = counts.get(token) ?? { count: 0, rowNumbers: new Set<number>() };
+        item.count += 1;
+        item.rowNumbers.add(row.index + 1);
+        counts.set(token, item);
       }
 
       if (rowIndex % 120 === 0 || rowIndex === textRows.length - 1) {
@@ -1939,14 +1950,21 @@ async function runCharacterStats() {
       }
     }
 
-    const sortedRows = Array.from(counts.entries()).sort(([charA, countA], [charB, countB]) => {
+    const sortedRows = Array.from(counts.entries()).sort(([charA, statsA], [charB, statsB]) => {
       const countDiff =
-        characterStatsSortOrder.value === "asc" ? countA - countB : countB - countA;
+        characterStatsSortOrder.value === "asc"
+          ? statsA.count - statsB.count
+          : statsB.count - statsA.count;
       return countDiff === 0 ? charA.localeCompare(charB) : countDiff;
     });
 
     characterStatsResult.value = sortedRows
-      .map(([character, count]) => `${displayUnmappedToken(character)}\t${count}`)
+      .map(([character, stats]) => {
+        const rowNumbers = Array.from(stats.rowNumbers)
+          .sort((a, b) => a - b)
+          .join(",");
+        return `${displayUnmappedToken(character)}\t${stats.count}\t${rowNumbers}`;
+      })
       .join("\n");
 
     characterStatsMessage.value =
@@ -2658,11 +2676,11 @@ async function confirmExcelImport() {
 
 async function rowsFromExcelImport() {
   const startRow = requiredPositiveInteger(excelImportStartRow.value, t("dialog.startRow"));
-  const charColumn = requiredPositiveInteger(
+  const charColumn = optionalPositiveInteger(
     excelImportCharColumn.value,
     "char column",
   );
-  const codeColumn = requiredPositiveInteger(
+  const codeColumn = optionalPositiveInteger(
     excelImportCodeColumn.value,
     "code column",
   );
@@ -2680,8 +2698,8 @@ async function rowsFromExcelImport() {
   for (const sheet of workbook) {
     for (let rowIndex = startRow - 1; rowIndex < sheet.rows.length; rowIndex += 1) {
       const cells = sheet.rows[rowIndex] ?? [];
-      const originalChar = excelCellText(cells, charColumn);
-      const code = normalizeCode(excelCellText(cells, codeColumn));
+      const originalChar = charColumn ? excelCellText(cells, charColumn) : "";
+      const code = codeColumn ? normalizeCode(excelCellText(cells, codeColumn)) : "";
       const width = widthColumn ? excelCellText(cells, widthColumn) : "";
       const note = noteColumn ? excelCellText(cells, noteColumn) : "";
 
@@ -3423,11 +3441,11 @@ async function copySelectedTableCells() {
 
   try {
     await copyText(text);
-    statusMessage.value = `${t("message.copiedSelectedRows")}: ${cells.length}.`;
+    statusMessage.value = `${t("message.copiedSelectedCells")}: ${cells.length}.`;
     errorMessage.value = "";
   } catch (error) {
     errorMessage.value =
-      error instanceof Error ? error.message : t("message.failedCopySelectedRows");
+      error instanceof Error ? error.message : t("message.failedCopySelectedCells");
     statusMessage.value = "";
   }
 }

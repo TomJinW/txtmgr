@@ -163,6 +163,8 @@ type TranslationKey =
   | "dialog.exportTblWarning"
   | "dialog.charColumnRequired"
   | "dialog.codeColumnRequired"
+  | "dialog.charColumnOptional"
+  | "dialog.codeColumnOptional"
   | "dialog.widthColumnOptional"
   | "dialog.noteColumnOptional"
   | "dialog.optional"
@@ -211,12 +213,14 @@ type TranslationKey =
   | "message.deleteSelectedConfirmSuffix"
   | "message.deletedSelected"
   | "message.copiedSelectedRows"
+  | "message.copiedSelectedCells"
   | "message.pastedCells"
   | "message.clipboardReadUnavailable"
   | "message.noPasteTarget"
   | "message.tableEditMode"
   | "message.tableSelectMode"
   | "message.failedCopySelectedRows"
+  | "message.failedCopySelectedCells"
   | "message.selectedFilteredRows"
   | "message.deselectedAllRows"
   | "message.noRowsSelected"
@@ -609,6 +613,8 @@ const translations: Record<AppLanguage, Record<TranslationKey, string>> = {
     "dialog.exportTblWarning": "Only char and code are exported. Width and note are not saved.",
     "dialog.charColumnRequired": "char column (required)",
     "dialog.codeColumnRequired": "code column (required)",
+    "dialog.charColumnOptional": "char column (optional, leave blank to skip)",
+    "dialog.codeColumnOptional": "code column (optional, leave blank to skip)",
     "dialog.widthColumnOptional": "width column (optional, leave blank to skip)",
     "dialog.noteColumnOptional": "note column (optional, leave blank to skip)",
     "dialog.optional": "Optional",
@@ -657,12 +663,14 @@ const translations: Record<AppLanguage, Record<TranslationKey, string>> = {
     "message.deleteSelectedConfirmSuffix": "selected row(s)? This can be undone once.",
     "message.deletedSelected": "Deleted selected rows",
     "message.copiedSelectedRows": "Copied selected rows",
+    "message.copiedSelectedCells": "Copied selected cells",
     "message.pastedCells": "Pasted cells",
     "message.clipboardReadUnavailable": "Clipboard read is unavailable.",
     "message.noPasteTarget": "Select a table cell before pasting as table.",
     "message.tableEditMode": "Table edit mode. Press T while not editing text to switch interaction mode.",
     "message.tableSelectMode": "Table select mode. Press T while not editing text to switch interaction mode.",
     "message.failedCopySelectedRows": "Failed to copy selected rows.",
+    "message.failedCopySelectedCells": "Failed to copy selected cells.",
     "message.selectedFilteredRows": "Selected filtered rows",
     "message.deselectedAllRows": "Deselected all rows.",
     "message.noRowsSelected": "No rows selected.",
@@ -1054,6 +1062,8 @@ const translations: Record<AppLanguage, Record<TranslationKey, string>> = {
     "dialog.exportTblWarning": "只导出 char 和 code。width 与 note 不会保存。",
     "dialog.charColumnRequired": "char 列（必填）",
     "dialog.codeColumnRequired": "code 列（必填）",
+    "dialog.charColumnOptional": "char 列（可选，留空跳过）",
+    "dialog.codeColumnOptional": "code 列（可选，留空跳过）",
     "dialog.widthColumnOptional": "width 列（可选，留空跳过）",
     "dialog.noteColumnOptional": "note 列（可选，留空跳过）",
     "dialog.optional": "可选",
@@ -1102,12 +1112,14 @@ const translations: Record<AppLanguage, Record<TranslationKey, string>> = {
     "message.deleteSelectedConfirmSuffix": "个选中行？这个操作可以撤销一次。",
     "message.deletedSelected": "已删除选中行",
     "message.copiedSelectedRows": "已复制选中行",
+    "message.copiedSelectedCells": "已复制选中单元格",
     "message.pastedCells": "已粘贴单元格",
     "message.clipboardReadUnavailable": "无法读取剪贴板。",
     "message.noPasteTarget": "请先选中一个表格单元格，再粘贴为表格。",
     "message.tableEditMode": "表格编辑模式。非编辑文本状态下按 T 切换交互模式。",
     "message.tableSelectMode": "表格选择模式。非编辑文本状态下按 T 切换交互模式。",
     "message.failedCopySelectedRows": "复制选中行失败。",
+    "message.failedCopySelectedCells": "复制选中单元格失败。",
     "message.selectedFilteredRows": "已选择过滤结果",
     "message.deselectedAllRows": "已取消全部选择。",
     "message.noRowsSelected": "没有选中行。",

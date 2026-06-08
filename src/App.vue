@@ -362,10 +362,7 @@ const canSaveJson = computed(() => rows.value.length > 0 && !isSaving.value);
 const canImportExcel = computed(
   () =>
     excelImportPath.value.trim() !== "" &&
-    excelImportOriginalColumn.value.trim() !== "" &&
-    excelImportTranslatedColumn.value.trim() !== "" &&
-    (excelImportFileNameMode.value !== "column" ||
-      excelImportFileNameColumn.value.trim() !== "") &&
+    hasExcelImportColumnMapping() &&
     excelImportStartRow.value >= 1 &&
     !isImportingExcel.value,
 );
@@ -376,6 +373,21 @@ const canExportExcel = computed(
     excelExportRowCount.value > 0 &&
     !isExportingExcel.value,
 );
+
+function hasExcelImportColumnMapping() {
+  return (
+    excelImportTitleColumn.value.trim() !== "" ||
+    excelImportOriginalColumn.value.trim() !== "" ||
+    excelImportTranslatedColumn.value.trim() !== "" ||
+    excelImportNoteColumn.value.trim() !== "" ||
+    excelImportAiOutputColumn.value.trim() !== "" ||
+    excelImportStateColumn.value.trim() !== "" ||
+    excelImportFileNameMode.value === "sheet" ||
+    (excelImportFileNameMode.value === "column" &&
+      excelImportFileNameColumn.value.trim() !== "")
+  );
+}
+
 const canImportSrt = computed(
   () => srtImportPath.value.trim() !== "" && !isImportingSrt.value,
 );
@@ -2456,11 +2468,11 @@ async function rowsFromExcelImport() {
     excelImportTitleColumn.value,
     "title_addr column",
   );
-  const originalColumn = requiredPositiveInteger(
+  const originalColumn = optionalPositiveInteger(
     excelImportOriginalColumn.value,
     "original_text column",
   );
-  const translatedColumn = requiredPositiveInteger(
+  const translatedColumn = optionalPositiveInteger(
     excelImportTranslatedColumn.value,
     "translated_text column",
   );
@@ -2478,7 +2490,7 @@ async function rowsFromExcelImport() {
   );
   const fileNameColumn =
     excelImportFileNameMode.value === "column"
-      ? requiredPositiveInteger(excelImportFileNameColumn.value, "file_name column")
+      ? optionalPositiveInteger(excelImportFileNameColumn.value, "file_name column")
       : null;
   const workbook = await readXlsxWorkbook(await readFile(excelImportPath.value.trim()));
   const outputRows: SentenceRow[] = [];
@@ -2486,8 +2498,8 @@ async function rowsFromExcelImport() {
   for (const sheet of workbook) {
     for (let rowIndex = startRow - 1; rowIndex < sheet.rows.length; rowIndex += 1) {
       const cells = sheet.rows[rowIndex] ?? [];
-      const originalText = excelCellText(cells, originalColumn);
-      const translatedText = excelCellText(cells, translatedColumn);
+      const originalText = originalColumn ? excelCellText(cells, originalColumn) : "";
+      const translatedText = translatedColumn ? excelCellText(cells, translatedColumn) : "";
       const titleAddr = titleColumn ? excelCellText(cells, titleColumn) : "";
       const note = noteColumn ? excelCellText(cells, noteColumn) : "";
       const aiOutput = aiOutputColumn ? excelCellText(cells, aiOutputColumn) : "";
@@ -3761,11 +3773,11 @@ async function copySelectedTableCells() {
 
   try {
     await copyText(text);
-    statusMessage.value = `${t("message.copiedSelectedRows")}: ${cells.length}.`;
+    statusMessage.value = `${t("message.copiedSelectedCells")}: ${cells.length}.`;
     errorMessage.value = "";
   } catch (error) {
     errorMessage.value =
-      error instanceof Error ? error.message : t("message.failedCopySelectedRows");
+      error instanceof Error ? error.message : t("message.failedCopySelectedCells");
     statusMessage.value = "";
   }
 }

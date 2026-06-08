@@ -91,21 +91,21 @@ watch(
           />
         </label>
         <label>
-          <span>original_text column ({{ t("dialog.required") }})</span>
+          <span>original_text column ({{ t("dialog.optional") }})</span>
           <input
             v-model="originalColumn"
             type="text"
             inputmode="numeric"
-            required
+            :placeholder="t('dialog.optional')"
           />
         </label>
         <label>
-          <span>translated_text column ({{ t("dialog.required") }})</span>
+          <span>translated_text column ({{ t("dialog.optional") }})</span>
           <input
             v-model="translatedColumn"
             type="text"
             inputmode="numeric"
-            required
+            :placeholder="t('dialog.optional')"
           />
         </label>
         <label>
@@ -151,7 +151,7 @@ watch(
               type="text"
               inputmode="numeric"
               :disabled="fileNameMode !== 'column'"
-              :placeholder="t('dialog.requiredForColumn')"
+              :placeholder="t('dialog.optional')"
             />
           </label>
         </div>
