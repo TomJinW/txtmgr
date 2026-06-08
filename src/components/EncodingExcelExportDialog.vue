@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { nextTick, ref, watch } from "vue";
 import { t } from "../i18n";
+import type { ExportScope } from "../types";
 
 defineProps<{
   canExport: boolean;
@@ -17,7 +18,7 @@ const emit = defineEmits<{
 }>();
 
 const path = defineModel<string>("path", { required: true });
-const filteredOnly = defineModel<boolean>("filteredOnly", { required: true });
+const scope = defineModel<ExportScope>("scope", { required: true });
 const input = ref<HTMLInputElement | null>(null);
 
 watch(
@@ -60,11 +61,16 @@ watch(
       </div>
 
       <div class="export-options">
-        <label class="checkbox-label">
-          <input v-model="filteredOnly" type="checkbox" />
-          <span>{{ t("dialog.filteredOnly") }}</span>
+        <label>
+          <span>{{ t("dialog.exportScope") }}</span>
+          <select v-model="scope">
+            <option value="all">{{ t("dialog.scopeAllRows") }}</option>
+            <option value="filtered">{{ t("dialog.scopeFilteredRows") }}</option>
+            <option value="selected">{{ t("dialog.scopeSelectedRows") }}</option>
+          </select>
         </label>
       </div>
+      <p class="export-summary">{{ t("dialog.rowsToExport") }}: {{ rowCount }}</p>
 
       <div class="dialog-actions">
         <button type="button" @click="emit('close')">{{ t("common.cancel") }}</button>
@@ -139,7 +145,8 @@ watch(
   gap: 8px;
 }
 
-.encoding-excel-export-dialog input[type="text"] {
+.encoding-excel-export-dialog input[type="text"],
+.encoding-excel-export-dialog select {
   width: 100%;
   min-height: 34px;
   border: 1px solid var(--control-border);
@@ -150,7 +157,8 @@ watch(
   font-size: 14px;
 }
 
-.encoding-excel-export-dialog input:focus {
+.encoding-excel-export-dialog input:focus,
+.encoding-excel-export-dialog select:focus {
   outline: 2px solid var(--primary);
   outline-offset: -1px;
 }
@@ -170,6 +178,12 @@ watch(
   display: grid;
   gap: 10px;
   margin-top: 12px;
+}
+
+.export-summary {
+  margin: 10px 0 0;
+  color: var(--text-soft);
+  font-size: 12px;
 }
 
 .encoding-excel-export-dialog .checkbox-label {

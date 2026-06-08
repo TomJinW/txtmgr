@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { nextTick, ref, watch } from "vue";
 import { t } from "../i18n";
+import type { ExportScope } from "../types";
 
 defineProps<{
   canExport: boolean;
@@ -17,7 +18,7 @@ const emit = defineEmits<{
 }>();
 
 const path = defineModel<string>("path", { required: true });
-const filteredOnly = defineModel<boolean>("filteredOnly", { required: true });
+const scope = defineModel<ExportScope>("scope", { required: true });
 const extension = defineModel<"txt" | "tbl">("extension", { required: true });
 const direction = defineModel<"code_char" | "char_code">("direction", {
   required: true,
@@ -72,9 +73,13 @@ watch(
       </p>
 
       <div class="export-options">
-        <label class="checkbox-label">
-          <input v-model="filteredOnly" type="checkbox" />
-          <span>{{ t("dialog.filteredOnly") }}</span>
+        <label>
+          <span>{{ t("dialog.exportScope") }}</span>
+          <select v-model="scope">
+            <option value="all">{{ t("dialog.scopeAllRows") }}</option>
+            <option value="filtered">{{ t("dialog.scopeFilteredRows") }}</option>
+            <option value="selected">{{ t("dialog.scopeSelectedRows") }}</option>
+          </select>
         </label>
 
         <label>
@@ -109,6 +114,7 @@ watch(
           </select>
         </label>
       </div>
+      <p class="export-summary">{{ t("dialog.rowsToExport") }}: {{ rowCount }}</p>
 
       <div class="dialog-actions">
         <button type="button" @click="emit('close')">{{ t("common.cancel") }}</button>
@@ -226,6 +232,12 @@ watch(
 .export-options {
   display: grid;
   gap: 10px;
+}
+
+.export-summary {
+  margin: 10px 0 0;
+  color: var(--text-soft);
+  font-size: 12px;
 }
 
 .encoding-export-dialog .checkbox-label {

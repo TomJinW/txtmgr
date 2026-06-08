@@ -21,9 +21,15 @@ import AiTranslationSessionDialog, {
 import BulkColumnDialog from "./components/BulkColumnDialog.vue";
 import BulkStateDialog from "./components/BulkStateDialog.vue";
 import CharacterStatsDialog from "./components/CharacterStatsDialog.vue";
+import EncodingCodeShiftDialog, {
+  type CodeShiftBase,
+  type CodeShiftOperation,
+} from "./components/EncodingCodeShiftDialog.vue";
 import ExcelExportDialog from "./components/ExcelExportDialog.vue";
 import ExcelImportDialog from "./components/ExcelImportDialog.vue";
+import FindReplaceBar, { type FindReplaceColumn } from "./components/FindReplaceBar.vue";
 import GoToRowDialog from "./components/GoToRowDialog.vue";
+import InsertRowsDialog from "./components/InsertRowsDialog.vue";
 import LanguageDialog from "./components/LanguageDialog.vue";
 import LlmSettingsDialog, {
   type LlmServerSettings,
@@ -45,6 +51,8 @@ import {
   defaultColumnWidths,
   draftStorageKey,
   estimatedRowHeight,
+  mainExcelExportScopeStorageKey,
+  mainSrtExportScopeStorageKey,
   maxHistorySteps,
   minColumnWidths,
   stateOptions,
@@ -73,6 +81,7 @@ import { shortcutMatches, windowsShortcutMatches, type ShortcutAction } from "./
 import type {
   CjkFallbackColumn,
   CjkFallbackMode,
+  ExportScope,
   FileNameImportMode,
   SentenceInput,
   SentenceRow,
@@ -111,6 +120,13 @@ const activeStatFilters = ref<StatFilter[]>([]);
 const goToRowValue = ref("");
 const rowFilterStart = ref("");
 const rowFilterEnd = ref("");
+const isFindReplaceOpen = ref(false);
+const findReplaceQuery = ref("");
+const findReplaceReplacement = ref("");
+const findReplaceMatchMode = ref<TextMatchMode>("contains");
+const isFindReplaceCaseSensitive = ref(false);
+const findReplaceColumns = ref<TextSearchKey[]>(textSearchColumns.map((column) => column.key));
+const currentFindMatchIndex = ref(0);
 const isGoToRowDialogOpen = ref(false);
 const isCharacterStatsDialogOpen = ref(false);
 const isExcelImportDialogOpen = ref(false);
@@ -123,6 +139,8 @@ const isAiTranslationDialogOpen = ref(false);
 const isAiTranslationSessionDialogOpen = ref(false);
 const isBulkColumnDialogOpen = ref(false);
 const isBulkStateDialogOpen = ref(false);
+const isCodeShiftDialogOpen = ref(false);
+const isInsertRowsDialogOpen = ref(false);
 const isSearchOverlayOpen = ref(false);
 const llmSettingsStorageKey = "txtmgr.llmServerSettings.v1";
 const llmSettings = ref<LlmServerSettings>(restoreLlmSettings());
@@ -162,7 +180,7 @@ const excelImportFileNameMode = ref<FileNameImportMode>("none");
 const excelImportFileNameColumn = ref("");
 const excelImportAppendRows = ref(false);
 const excelExportPath = ref("");
-const exportFilteredOnly = ref(false);
+const exportScope = ref<ExportScope>(restoreExportScope(mainExcelExportScopeStorageKey));
 const exportSplitByFileName = ref(false);
 const exportIncludeRowNumber = ref(true);
 const srtImportPath = ref("");
@@ -170,7 +188,7 @@ const srtImportAppendRows = ref(false);
 const srtExportPath = ref("");
 const srtExportEncoding = ref<SrtExportEncoding>("utf-8");
 const srtExportBilingual = ref(false);
-const srtExportFilteredOnly = ref(false);
+const srtExportScope = ref<ExportScope>(restoreExportScope(mainSrtExportScopeStorageKey));
 const selectedRowIds = ref<Set<number>>(new Set());
 const selectionAnchorRowId = ref<number | null>(null);
 type MainBulkEditableColumn = Exclude<keyof SentenceRow, "state">;
@@ -185,10 +203,27 @@ const bulkEditableColumns: { key: MainBulkEditableColumn; label: string }[] = [
 const bulkColumnKey = ref<MainBulkEditableColumn>(restoreBulkColumnKey());
 const bulkColumnValue = ref("");
 const bulkStateValue = ref<StateValue>(restoreBulkStateValue());
+const codeShiftColumn = ref<MainBulkEditableColumn>("title_addr");
+const codeShiftOperation = ref<CodeShiftOperation>("add");
+const codeShiftBase = ref<CodeShiftBase>("hex");
+const codeShiftXValue = ref("0");
+const codeShiftYValue = ref("0");
+const insertRowsTargetRow = ref("1");
+const insertRowsCount = ref("1");
 const characterStatsScope = ref<"all" | "filtered" | "selected">("filtered");
 const characterStatsIncludeAll = ref(true);
 const characterStatsTypes = ref<
-  ("western" | "han" | "kana" | "hangul" | "fullwidth" | "halfwidth" | "token")[]
+  (
+    | "western"
+    | "han"
+    | "kana"
+    | "hangul"
+    | "fullwidth_letters"
+    | "fullwidth"
+    | "halfwidth"
+    | "token"
+    | "other"
+  )[]
 >([]);
 const characterStatsSortOrder = ref<"desc" | "asc">("desc");
 const characterStatsBracketTokenTypes = ref<("square" | "curly" | "angle")[]>([
@@ -229,6 +264,7 @@ let unlistenReadJson: UnlistenFn | undefined;
 let unlistenSaveJson: UnlistenFn | undefined;
 let unlistenSaveJsonAs: UnlistenFn | undefined;
 let unlistenOpenSearchPanel: UnlistenFn | undefined;
+let unlistenOpenFindReplace: UnlistenFn | undefined;
 let unlistenImportExcel: UnlistenFn | undefined;
 let unlistenExportExcel: UnlistenFn | undefined;
 let unlistenImportSrt: UnlistenFn | undefined;
@@ -248,6 +284,8 @@ let unlistenSelectAllFiltered: UnlistenFn | undefined;
 let unlistenDeselectAllRows: UnlistenFn | undefined;
 let unlistenBulkState: UnlistenFn | undefined;
 let unlistenBulkColumn: UnlistenFn | undefined;
+let unlistenCodeShift: UnlistenFn | undefined;
+let unlistenInsertRows: UnlistenFn | undefined;
 let unlistenToggleMainColumnVisibility: UnlistenFn | undefined;
 let unlistenToggleMainTopPanel: UnlistenFn | undefined;
 let pendingEditSnapshot: string | null = null;
@@ -312,6 +350,7 @@ const canExportExcel = computed(
   () =>
     rows.value.length > 0 &&
     excelExportPath.value.trim() !== "" &&
+    excelExportRowCount.value > 0 &&
     !isExportingExcel.value,
 );
 const canImportSrt = computed(
@@ -321,12 +360,15 @@ const canExportSrt = computed(
   () =>
     rows.value.length > 0 &&
     srtExportPath.value.trim() !== "" &&
+    srtExportRowCount.value > 0 &&
     !isExportingSrt.value,
 );
 const canUndoTableChange = computed(() => undoStack.value.length > 0);
 const canRedoTableChange = computed(() => redoStack.value.length > 0);
 
 const selectedRowCount = computed(() => selectedRowIds.value.size);
+const excelExportRowCount = computed(() => rowsForExcelExport().length);
+const srtExportRowCount = computed(() => rowsForSrtExport().length);
 
 const characterStatsRowCount = computed(() => characterStatsRows().length);
 const aiTranslationRowCount = computed(() => aiTranslationRows().length);
@@ -370,6 +412,43 @@ const filteredRows = computed(() =>
   textFilteredRows.value.filter(
     ({ row, index }) => rowMatchesStatFilter(row) && rowMatchesRowRange(index),
   ),
+);
+
+type FindReplaceMatch = {
+  columnKey: TextSearchKey;
+  filteredIndex: number;
+  row: SentenceRow;
+  rowIndex: number;
+};
+
+const availableFindReplaceColumns = computed<FindReplaceColumn[]>(() => {
+  const visibleKeys = new Set(displayedColumns.value.map((column) => column.key));
+  return textSearchColumns.filter((column) => visibleKeys.has(column.key));
+});
+
+const findReplaceMatches = computed<FindReplaceMatch[]>(() => {
+  const query = findReplaceQuery.value;
+  if (query === "" || findReplaceColumns.value.length === 0) return [];
+
+  const activeColumns = findReplaceColumns.value.filter((columnKey) =>
+    availableFindReplaceColumns.value.some((column) => column.key === columnKey),
+  );
+  if (activeColumns.length === 0) return [];
+
+  const matches: FindReplaceMatch[] = [];
+  filteredRows.value.forEach(({ row, index }, filteredIndex) => {
+    for (const columnKey of activeColumns) {
+      if (findReplaceCellMatches(row[columnKey], query)) {
+        matches.push({ columnKey, filteredIndex, row, rowIndex: index });
+      }
+    }
+  });
+
+  return matches;
+});
+
+const currentFindReplaceMatch = computed(
+  () => findReplaceMatches.value[currentFindMatchIndex.value] ?? null,
 );
 
 const duplicateTitleAddressIds = computed(() => {
@@ -528,6 +607,14 @@ watch(bulkColumnKey, () => {
   persistBulkColumnKey();
 });
 
+watch(exportScope, () => {
+  persistExportScope(mainExcelExportScopeStorageKey, exportScope.value);
+});
+
+watch(srtExportScope, () => {
+  persistExportScope(mainSrtExportScopeStorageKey, srtExportScope.value);
+});
+
 watch(isTopPanelVisible, () => {
   persistTopPanelVisible();
   nextTick(() => {
@@ -583,6 +670,25 @@ watch(
   },
 );
 
+watch(availableFindReplaceColumns, (availableColumns) => {
+  const availableKeys = new Set(availableColumns.map((column) => column.key));
+  const nextColumns = findReplaceColumns.value.filter((column) => availableKeys.has(column));
+  findReplaceColumns.value =
+    nextColumns.length > 0
+      ? nextColumns
+      : availableColumns.map((column) => column.key as TextSearchKey);
+});
+
+watch(findReplaceMatches, (matches) => {
+  if (matches.length === 0) {
+    currentFindMatchIndex.value = 0;
+    return;
+  }
+  if (currentFindMatchIndex.value >= matches.length) {
+    currentFindMatchIndex.value = matches.length - 1;
+  }
+});
+
 watch(
   () => [
     rows.value,
@@ -617,6 +723,7 @@ onBeforeUnmount(() => {
   unlistenSaveJson?.();
   unlistenSaveJsonAs?.();
   unlistenOpenSearchPanel?.();
+  unlistenOpenFindReplace?.();
   unlistenImportExcel?.();
   unlistenExportExcel?.();
   unlistenImportSrt?.();
@@ -636,6 +743,8 @@ onBeforeUnmount(() => {
   unlistenDeselectAllRows?.();
   unlistenBulkState?.();
   unlistenBulkColumn?.();
+  unlistenCodeShift?.();
+  unlistenInsertRows?.();
   unlistenToggleMainColumnVisibility?.();
   unlistenToggleMainTopPanel?.();
   window.removeEventListener("focus", handleWindowFocus);
@@ -759,6 +868,7 @@ function handleWindowsMenuShortcut(event: KeyboardEvent) {
     { action: "import_srt", run: () => void openSrtImportDialog() },
     { action: "export_srt", run: () => void openSrtExportDialog() },
     { action: "toggle_main_top_panel", run: () => toggleTopPanel() },
+    { action: "open_find_replace", run: () => toggleFindReplaceBar() },
     { action: "open_language_dialog", run: () => openLanguageDialog() },
     {
       action: "open_encoding_manager",
@@ -773,8 +883,10 @@ function handleWindowsMenuShortcut(event: KeyboardEvent) {
     { action: "copy_selected", run: () => void copySelectedRowsForSpreadsheet() },
     { action: "select_all_filtered", run: () => selectAllFilteredRows() },
     { action: "deselect_all_rows", run: () => deselectAllRows() },
+    { action: "insert_rows", run: () => openInsertRowsDialog("end") },
     { action: "bulk_change_state", run: () => openBulkStateDialog() },
     { action: "bulk_change_column", run: () => openBulkColumnDialog() },
+    { action: "code_shift", run: () => openCodeShiftDialog() },
     { action: "character_stats", run: () => openCharacterStatsDialog() },
     { action: "language_en", run: () => setAppLanguage("en") },
     { action: "language_zh_hans", run: () => setAppLanguage("zh-Hans") },
@@ -837,6 +949,16 @@ function registerMenuListeners() {
     })
     .catch((error) => {
       console.warn("Failed to register search panel menu listener.", error);
+    });
+
+  listen("open-find-replace", () => {
+    toggleFindReplaceBar();
+  })
+    .then((unlisten) => {
+      unlistenOpenFindReplace = unlisten;
+    })
+    .catch((error) => {
+      console.warn("Failed to register find replace menu listener.", error);
     });
 
   listen("import-excel", () => {
@@ -1030,6 +1152,26 @@ function registerMenuListeners() {
       console.warn("Failed to register bulk column menu listener.", error);
     });
 
+  listen("code-shift", () => {
+    openCodeShiftDialog();
+  })
+    .then((unlisten) => {
+      unlistenCodeShift = unlisten;
+    })
+    .catch((error) => {
+      console.warn("Failed to register code shift menu listener.", error);
+    });
+
+  listen("insert-rows", () => {
+    openInsertRowsDialog("end");
+  })
+    .then((unlisten) => {
+      unlistenInsertRows = unlisten;
+    })
+    .catch((error) => {
+      console.warn("Failed to register insert rows menu listener.", error);
+    });
+
   listen<string>("toggle-main-column-visibility", (event) => {
     toggleColumnVisibility(event.payload);
   })
@@ -1056,10 +1198,12 @@ type MainDialog =
   | "aiTranslationSession"
   | "bulkColumn"
   | "bulkState"
+  | "codeShift"
   | "characterStats"
   | "excelExport"
   | "excelImport"
   | "goToRow"
+  | "insertRows"
   | "language"
   | "llmSettings"
   | "srtExport"
@@ -1097,6 +1241,9 @@ function openMainDialog(dialog: MainDialog) {
     case "bulkState":
       isBulkStateDialogOpen.value = true;
       break;
+    case "codeShift":
+      isCodeShiftDialogOpen.value = true;
+      break;
     case "characterStats":
       isCharacterStatsDialogOpen.value = true;
       break;
@@ -1108,6 +1255,9 @@ function openMainDialog(dialog: MainDialog) {
       break;
     case "goToRow":
       isGoToRowDialogOpen.value = true;
+      break;
+    case "insertRows":
+      isInsertRowsDialogOpen.value = true;
       break;
     case "language":
       isLanguageDialogOpen.value = true;
@@ -1131,12 +1281,14 @@ function closeMainDialogs() {
   isAiTranslationSessionDialogOpen.value = false;
   isBulkColumnDialogOpen.value = false;
   isBulkStateDialogOpen.value = false;
+  isCodeShiftDialogOpen.value = false;
   isCharacterStatsDialogOpen.value = false;
   isExcelExportDialogOpen.value = false;
   isExcelImportDialogOpen.value = false;
   isSrtExportDialogOpen.value = false;
   isSrtImportDialogOpen.value = false;
   isGoToRowDialogOpen.value = false;
+  isInsertRowsDialogOpen.value = false;
   isLanguageDialogOpen.value = false;
   isLlmSettingsDialogOpen.value = false;
 }
@@ -1147,12 +1299,14 @@ function hasOpenMainDialog() {
     isAiTranslationSessionDialogOpen.value ||
     isBulkColumnDialogOpen.value ||
     isBulkStateDialogOpen.value ||
+    isCodeShiftDialogOpen.value ||
     isCharacterStatsDialogOpen.value ||
     isExcelExportDialogOpen.value ||
     isExcelImportDialogOpen.value ||
     isSrtExportDialogOpen.value ||
     isSrtImportDialogOpen.value ||
     isGoToRowDialogOpen.value ||
+    isInsertRowsDialogOpen.value ||
     isLanguageDialogOpen.value ||
     isLlmSettingsDialogOpen.value
   );
@@ -2390,8 +2544,12 @@ async function confirmSrtExport() {
 }
 
 function rowsForSrtExport() {
-  if (srtExportFilteredOnly.value) {
+  if (srtExportScope.value === "filtered") {
     return filteredRows.value.map(({ row }) => row);
+  }
+
+  if (srtExportScope.value === "selected") {
+    return rows.value.filter((row) => selectedRowIds.value.has(getRowIdentity(row)));
   }
 
   return rows.value;
@@ -2512,8 +2670,14 @@ async function confirmExcelExport() {
 }
 
 function rowsForExcelExport() {
-  if (exportFilteredOnly.value) {
+  if (exportScope.value === "filtered") {
     return filteredRows.value.map(({ row, index }) => ({ row, index }));
+  }
+
+  if (exportScope.value === "selected") {
+    return rows.value
+      .map((row, index) => ({ row, index }))
+      .filter(({ row }) => selectedRowIds.value.has(getRowIdentity(row)));
   }
 
   return rows.value.map((row, index) => ({ row, index }));
@@ -2693,17 +2857,31 @@ function characterMatchesStatsType(character: string) {
 
 function characterMatchesSingleStatsType(
   character: string,
-  type: "western" | "han" | "kana" | "hangul" | "fullwidth" | "halfwidth" | "token",
-) {
+  type:
+    | "western"
+    | "han"
+    | "kana"
+    | "hangul"
+    | "fullwidth_letters"
+    | "fullwidth"
+    | "halfwidth"
+    | "token"
+    | "other",
+): boolean {
   switch (type) {
     case "western":
-      return /\p{Script=Latin}/u.test(character);
+      return (
+        /\p{Script=Latin}/u.test(character) &&
+        !characterMatchesSingleStatsType(character, "fullwidth_letters")
+      );
     case "han":
       return /\p{Script=Han}/u.test(character);
     case "kana":
       return /[\p{Script=Hiragana}\p{Script=Katakana}]/u.test(character);
     case "hangul":
       return /\p{Script=Hangul}/u.test(character);
+    case "fullwidth_letters":
+      return /[\uFF21-\uFF3A\uFF41-\uFF5A]/u.test(character);
     case "fullwidth":
       return /[\uFF10-\uFF19\uFF01-\uFF0F\uFF1A-\uFF20\uFF3B-\uFF40\uFF5B-\uFF65]/u.test(
         character,
@@ -2712,6 +2890,16 @@ function characterMatchesSingleStatsType(
       return /[0-9!-\/:-@[-`{-~]/u.test(character);
     case "token":
       return false;
+    case "other":
+      return !(
+        characterMatchesSingleStatsType(character, "western") ||
+        characterMatchesSingleStatsType(character, "han") ||
+        characterMatchesSingleStatsType(character, "kana") ||
+        characterMatchesSingleStatsType(character, "hangul") ||
+        characterMatchesSingleStatsType(character, "fullwidth_letters") ||
+        characterMatchesSingleStatsType(character, "fullwidth") ||
+        characterMatchesSingleStatsType(character, "halfwidth")
+      );
   }
 }
 
@@ -2850,10 +3038,42 @@ function addRowAfter(rowIndex: number) {
   markStatSnapshotDirty();
 }
 
-function addRowAtEnd() {
+function openInsertRowsDialog(position: "start" | "end" = "end") {
+  insertRowsTargetRow.value = position === "start" ? "1" : String(rows.value.length + 1);
+  insertRowsCount.value = "1";
+  openMainDialog("insertRows");
+}
+
+function closeInsertRowsDialog() {
+  isInsertRowsDialogOpen.value = false;
+}
+
+function confirmInsertRows() {
+  const targetRow = Number.parseInt(insertRowsTargetRow.value, 10);
+  const count = Number.parseInt(insertRowsCount.value, 10);
+  const maxRow = rows.value.length + 1;
+  if (
+    !Number.isInteger(targetRow) ||
+    !Number.isInteger(count) ||
+    targetRow < 1 ||
+    targetRow > maxRow ||
+    count < 1
+  ) {
+    errorMessage.value = t("insertRows.invalid");
+    statusMessage.value = "";
+    return;
+  }
+
   recordCurrentStateForUndo();
-  rows.value.push(createEmptyRow());
+  const insertIndex = targetRow - 1;
+  rows.value.splice(insertIndex, 0, ...Array.from({ length: count }, createEmptyRow));
+  if (pendingDeleteIndex.value !== null && pendingDeleteIndex.value >= insertIndex) {
+    pendingDeleteIndex.value += count;
+  }
   markStatSnapshotDirty();
+  closeInsertRowsDialog();
+  statusMessage.value = `${t("insertRows.inserted")}: ${count}.`;
+  errorMessage.value = "";
 }
 
 async function clearRows() {
@@ -2968,6 +3188,107 @@ function openBulkColumnDialog() {
 
 function closeBulkColumnDialog() {
   isBulkColumnDialogOpen.value = false;
+}
+
+function openCodeShiftDialog() {
+  pruneSelectedRows(true);
+  if (selectedRowIds.value.size === 0) {
+    statusMessage.value = t("message.noRowsSelected");
+    errorMessage.value = "";
+    return;
+  }
+
+  if (!openMainDialog("codeShift")) return;
+}
+
+function closeCodeShiftDialog() {
+  isCodeShiftDialogOpen.value = false;
+}
+
+async function confirmCodeShift() {
+  const selectedIds = selectedRowIds.value;
+  if (selectedIds.size === 0) {
+    closeCodeShiftDialog();
+    return;
+  }
+
+  const x = parseCodeShiftInput(codeShiftXValue.value, codeShiftBase.value);
+  const y = parseCodeShiftInput(codeShiftYValue.value, codeShiftBase.value);
+  if (x === null || y === null) {
+    errorMessage.value = t("encoding.codeShiftInvalidInput");
+    statusMessage.value = "";
+    return;
+  }
+
+  const delta = x + 0x100 * y;
+  const signedDelta = codeShiftOperation.value === "add" ? delta : -delta;
+  const confirmed = await confirm(
+    `${t("encoding.codeShiftConfirm")} ${t("bulk.selectedRows")}: ${selectedIds.size}.`,
+    {
+      title: t("encoding.codeShiftTitle"),
+      kind: "warning",
+    },
+  );
+
+  if (!confirmed) return;
+
+  recordCurrentStateForUndo();
+  let changedCount = 0;
+  let skippedCount = 0;
+  rows.value.forEach((row) => {
+    if (!selectedIds.has(getRowIdentity(row))) return;
+
+    const sourceValue = row[codeShiftColumn.value];
+    const sourceNumber = parseHexCellValue(sourceValue);
+    if (sourceNumber === null) {
+      skippedCount += 1;
+      return;
+    }
+
+    const nextNumber = sourceNumber + signedDelta;
+    if (nextNumber < 0) {
+      skippedCount += 1;
+      return;
+    }
+
+    row[codeShiftColumn.value] = formatHexCellValue(nextNumber, sourceValue);
+    changedCount += 1;
+  });
+
+  rows.value = [...rows.value];
+  pruneSelectedRows(true);
+  markStatSnapshotDirty();
+  closeCodeShiftDialog();
+  statusMessage.value = `${t("encoding.codeShiftChanged")}: ${changedCount}; ${t("encoding.codeShiftSkipped")}: ${skippedCount}.`;
+  errorMessage.value = "";
+}
+
+function parseCodeShiftInput(value: string, base: CodeShiftBase) {
+  const trimmed = value.trim();
+  if (trimmed === "") return 0;
+
+  if (base === "hex") {
+    const normalized = trimmed.replace(/^0x/i, "");
+    if (!/^[0-9a-f]+$/i.test(normalized)) return null;
+    return Number.parseInt(normalized, 16);
+  }
+
+  if (!/^\d+$/u.test(trimmed)) return null;
+  return Number.parseInt(trimmed, 10);
+}
+
+function parseHexCellValue(value: string) {
+  const normalized = value.trim().replace(/^0x/i, "");
+  if (normalized === "" || !/^[0-9a-f]+$/i.test(normalized)) return null;
+  return Number.parseInt(normalized, 16);
+}
+
+function formatHexCellValue(value: number, sourceValue: string) {
+  const source = sourceValue.trim().replace(/^0x/i, "");
+  const minLength = Math.max(2, source.length);
+  const hex = value.toString(16).toUpperCase();
+  const paddedLength = Math.max(minLength, hex.length % 2 === 0 ? hex.length : hex.length + 1);
+  return hex.padStart(paddedLength, "0");
 }
 
 async function confirmBulkColumnChange() {
@@ -3245,6 +3566,154 @@ async function goToRow() {
   await nextTick();
   alignRenderedRow(filteredRows.value[filteredIndex].row);
   return true;
+}
+
+function openFindReplaceBar() {
+  isFindReplaceOpen.value = true;
+  if (findReplaceColumns.value.length === 0) {
+    findReplaceColumns.value = availableFindReplaceColumns.value.map(
+      (column) => column.key as TextSearchKey,
+    );
+  }
+  nextTick(() => {
+    void jumpToFindReplaceMatch(currentFindMatchIndex.value);
+  });
+}
+
+function toggleFindReplaceBar() {
+  if (isFindReplaceOpen.value) {
+    closeFindReplaceBar();
+    return;
+  }
+  openFindReplaceBar();
+}
+
+function closeFindReplaceBar() {
+  isFindReplaceOpen.value = false;
+}
+
+function findReplaceCellMatches(value: string, query: string) {
+  const source = isFindReplaceCaseSensitive.value ? value : value.toLocaleLowerCase();
+  const needle = isFindReplaceCaseSensitive.value ? query : query.toLocaleLowerCase();
+  return findReplaceMatchMode.value === "exact"
+    ? source === needle
+    : source.includes(needle);
+}
+
+function replacementForFindCell(value: string) {
+  if (findReplaceMatchMode.value === "exact") return findReplaceReplacement.value;
+
+  if (findReplaceQuery.value === "") return value;
+  const flags = isFindReplaceCaseSensitive.value ? "g" : "gi";
+  return value.replace(
+    new RegExp(escapeRegExp(findReplaceQuery.value), flags),
+    findReplaceReplacement.value,
+  );
+}
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+async function showPreviousFindReplaceMatch() {
+  if (findReplaceMatches.value.length === 0) return;
+  currentFindMatchIndex.value =
+    (currentFindMatchIndex.value - 1 + findReplaceMatches.value.length) %
+    findReplaceMatches.value.length;
+  await jumpToFindReplaceMatch(currentFindMatchIndex.value);
+}
+
+async function showNextFindReplaceMatch() {
+  if (findReplaceMatches.value.length === 0) return;
+  currentFindMatchIndex.value =
+    (currentFindMatchIndex.value + 1) % findReplaceMatches.value.length;
+  await jumpToFindReplaceMatch(currentFindMatchIndex.value);
+}
+
+async function jumpToFindReplaceMatch(matchIndex: number) {
+  const match = findReplaceMatches.value[matchIndex];
+  if (!match) return;
+
+  const nextScrollTop = sumRowHeights(filteredRows.value, 0, match.filteredIndex);
+  tableScrollTop.value = nextScrollTop;
+  if (tableWrap.value) {
+    tableWrap.value.scrollTop = nextScrollTop;
+  }
+  updateTableViewport();
+  await nextTick();
+  alignRenderedRow(match.row);
+  await nextTick();
+  alignRenderedFindCell(match);
+}
+
+function alignRenderedFindCell(match: FindReplaceMatch) {
+  const rowElement = rowElements.get(getRowIdentity(match.row));
+  const wrapper = tableWrap.value;
+  if (!rowElement || !wrapper) return;
+
+  const cell = rowElement.querySelector<HTMLElement>(
+    `[data-cell-column="${match.columnKey}"]`,
+  );
+  if (!cell) return;
+
+  const wrapperRect = wrapper.getBoundingClientRect();
+  const cellRect = cell.getBoundingClientRect();
+  if (cellRect.left < wrapperRect.left || cellRect.right > wrapperRect.right) {
+    wrapper.scrollLeft += cellRect.left - wrapperRect.left - 12;
+  }
+}
+
+function isCurrentFindReplaceCell(row: SentenceRow, columnKey: ColumnKey) {
+  const match = currentFindReplaceMatch.value;
+  return (
+    Boolean(match) &&
+    match?.row === row &&
+    match.columnKey === columnKey
+  );
+}
+
+function replaceCurrentFindReplaceMatch() {
+  const match = currentFindReplaceMatch.value;
+  if (!match) return;
+
+  const currentValue = match.row[match.columnKey];
+  const nextValue = replacementForFindCell(currentValue);
+  if (nextValue === currentValue) return;
+
+  recordCurrentStateForUndo();
+  match.row[match.columnKey] = nextValue;
+  markStatSnapshotDirty();
+  statusMessage.value = `${t("find.replacedCells")}: 1.`;
+  errorMessage.value = "";
+}
+
+async function replaceAllFindReplaceMatches() {
+  if (findReplaceMatches.value.length === 0) return;
+
+  const shouldReplace = await confirm(t("find.replaceAllConfirm"), {
+    title: t("find.replaceAllTitle"),
+  });
+  if (!shouldReplace) return;
+
+  const uniqueCells = new Map<string, FindReplaceMatch>();
+  for (const match of findReplaceMatches.value) {
+    uniqueCells.set(`${getRowIdentity(match.row)}:${match.columnKey}`, match);
+  }
+
+  recordCurrentStateForUndo();
+  let changedCount = 0;
+  for (const match of uniqueCells.values()) {
+    const currentValue = match.row[match.columnKey];
+    const nextValue = replacementForFindCell(currentValue);
+    if (nextValue === currentValue) continue;
+    match.row[match.columnKey] = nextValue;
+    changedCount += 1;
+  }
+
+  markStatSnapshotDirty();
+  currentFindMatchIndex.value = 0;
+  statusMessage.value = `${t("find.replacedCells")}: ${changedCount}.`;
+  errorMessage.value = "";
 }
 
 function rowHeight(row: SentenceRow) {
@@ -3604,6 +4073,17 @@ function restoreBulkColumnKey(): MainBulkEditableColumn {
 
 function persistBulkColumnKey() {
   window.localStorage.setItem(bulkColumnStorageKey, bulkColumnKey.value);
+}
+
+function restoreExportScope(storageKey: string): ExportScope {
+  const storedScope = window.localStorage.getItem(storageKey);
+  return storedScope === "all" || storedScope === "filtered" || storedScope === "selected"
+    ? storedScope
+    : "all";
+}
+
+function persistExportScope(storageKey: string, scope: ExportScope) {
+  window.localStorage.setItem(storageKey, scope);
 }
 
 function sanitizeLlmSettings(value: unknown): LlmServerSettings {
@@ -4446,6 +4926,23 @@ function startResize(columnIndex: number, event: PointerEvent) {
       </div>
     </div>
 
+    <FindReplaceBar
+      v-if="isFindReplaceOpen"
+      v-model:query="findReplaceQuery"
+      v-model:replacement="findReplaceReplacement"
+      v-model:selected-columns="findReplaceColumns"
+      v-model:match-mode="findReplaceMatchMode"
+      v-model:case-sensitive="isFindReplaceCaseSensitive"
+      :columns="availableFindReplaceColumns"
+      :current-match-index="currentFindMatchIndex"
+      :match-count="findReplaceMatches.length"
+      @close="closeFindReplaceBar"
+      @find-next="showNextFindReplaceMatch"
+      @find-previous="showPreviousFindReplaceMatch"
+      @replace="replaceCurrentFindReplaceMatch"
+      @replace-all="replaceAllFindReplaceMatches"
+    />
+
     <section
       ref="tableWrap"
       class="table-wrap"
@@ -4481,7 +4978,7 @@ function startResize(columnIndex: number, event: PointerEvent) {
                 class="row-action-btn add-row-btn"
                 type="button"
                 :aria-label="t('main.addRowAtEnd')"
-                @click="addRowAtEnd"
+                @click="openInsertRowsDialog('start')"
               >
                 +
               </button>
@@ -4663,6 +5160,8 @@ function startResize(columnIndex: number, event: PointerEvent) {
             <div
               v-else
               class="textarea-cell"
+              :class="{ 'find-current-cell': isCurrentFindReplaceCell(row, column.key) }"
+              :data-cell-column="column.key"
               :style="sentenceCellStyle(column.key)"
             >
               <textarea
@@ -4701,6 +5200,11 @@ function startResize(columnIndex: number, event: PointerEvent) {
           class="virtual-spacer"
           :style="{ height: `${virtualRange.bottomPadding}px` }"
         />
+        <div class="table-footer-actions">
+          <button type="button" class="footer-insert-btn" @click="openInsertRowsDialog('end')">
+            +
+          </button>
+        </div>
       </div>
     </section>
 
@@ -4829,6 +5333,28 @@ function startResize(columnIndex: number, event: PointerEvent) {
       @confirm="confirmBulkColumnChange"
     />
 
+    <EncodingCodeShiftDialog
+      v-if="isCodeShiftDialogOpen"
+      v-model:column="codeShiftColumn"
+      v-model:operation="codeShiftOperation"
+      v-model:base="codeShiftBase"
+      v-model:x-value="codeShiftXValue"
+      v-model:y-value="codeShiftYValue"
+      :columns="bulkEditableColumns"
+      :selected-count="selectedRowCount"
+      @close="closeCodeShiftDialog"
+      @confirm="confirmCodeShift"
+    />
+
+    <InsertRowsDialog
+      v-if="isInsertRowsDialogOpen"
+      v-model:target-row="insertRowsTargetRow"
+      v-model:count="insertRowsCount"
+      :max-row="rows.length + 1"
+      @close="closeInsertRowsDialog"
+      @confirm="confirmInsertRows"
+    />
+
     <ExcelImportDialog
       v-if="isExcelImportDialogOpen"
       v-model:path="excelImportPath"
@@ -4854,14 +5380,14 @@ function startResize(columnIndex: number, event: PointerEvent) {
     <ExcelExportDialog
       v-if="isExcelExportDialogOpen"
       v-model:path="excelExportPath"
-      v-model:filtered-only="exportFilteredOnly"
+      v-model:scope="exportScope"
       v-model:split-by-file-name="exportSplitByFileName"
       v-model:include-row-number="exportIncludeRowNumber"
       :can-export="canExportExcel"
       :is-error="errorMessage !== ''"
       :is-exporting="isExportingExcel"
       :message="displayedMessage"
-      :row-count="rows.length"
+      :row-count="excelExportRowCount"
       @browse="browseExcelExportPath"
       @close="closeExcelExportDialog"
       @confirm="confirmExcelExport"
@@ -4885,12 +5411,12 @@ function startResize(columnIndex: number, event: PointerEvent) {
       v-model:path="srtExportPath"
       v-model:encoding="srtExportEncoding"
       v-model:bilingual="srtExportBilingual"
-      v-model:filtered-only="srtExportFilteredOnly"
+      v-model:scope="srtExportScope"
       :can-export="canExportSrt"
       :is-error="errorMessage !== ''"
       :is-exporting="isExportingSrt"
       :message="displayedMessage"
-      :row-count="rows.length"
+      :row-count="srtExportRowCount"
       @browse="browseSrtExportPath"
       @close="closeSrtExportDialog"
       @confirm="confirmSrtExport"
@@ -5635,6 +6161,19 @@ button {
   margin-top: 12px;
 }
 
+.export-options label:not(.checkbox-label) {
+  display: grid;
+  gap: 4px;
+  color: var(--text-soft);
+  font-size: 12px;
+}
+
+.export-summary {
+  margin: 10px 0 0;
+  color: var(--text-soft);
+  font-size: 12px;
+}
+
 .srt-select-field {
   display: grid;
   gap: 4px;
@@ -5951,11 +6490,35 @@ button {
   border-right-color: transparent;
 }
 
+.textarea-cell.find-current-cell {
+  outline: 2px solid var(--warning);
+  outline-offset: -2px;
+  background: var(--warning-bg);
+}
+
 .table-end-spacer {
   min-height: 42px;
   background: var(--panel-bg);
   pointer-events: none;
   user-select: none;
+}
+
+.table-footer-actions {
+  display: flex;
+  align-items: center;
+  min-height: 34px;
+  padding: 4px 10px;
+  background: var(--panel-bg);
+}
+
+.footer-insert-btn {
+  width: 24px;
+  min-height: 24px;
+  border: 1px solid var(--success);
+  border-radius: 6px;
+  color: var(--on-accent);
+  background: var(--success);
+  font-weight: 700;
 }
 
 .header-row .table-end-spacer {

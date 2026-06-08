@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { nextTick, ref, watch } from "vue";
 import { t } from "../i18n";
+import type { ExportScope } from "../types";
 
 export type SrtExportEncoding =
   | "utf-8"
@@ -26,7 +27,7 @@ const emit = defineEmits<{
 const path = defineModel<string>("path", { required: true });
 const encoding = defineModel<SrtExportEncoding>("encoding", { required: true });
 const bilingual = defineModel<boolean>("bilingual", { required: true });
-const filteredOnly = defineModel<boolean>("filteredOnly", { required: true });
+const scope = defineModel<ExportScope>("scope", { required: true });
 const input = ref<HTMLInputElement | null>(null);
 
 watch(
@@ -80,15 +81,20 @@ watch(
       </label>
 
       <div class="export-options">
-        <label class="checkbox-label">
-          <input v-model="filteredOnly" type="checkbox" />
-          <span>{{ t("dialog.filteredOnly") }}</span>
+        <label>
+          <span>{{ t("dialog.exportScope") }}</span>
+          <select v-model="scope">
+            <option value="all">{{ t("dialog.scopeAllRows") }}</option>
+            <option value="filtered">{{ t("dialog.scopeFilteredRows") }}</option>
+            <option value="selected">{{ t("dialog.scopeSelectedRows") }}</option>
+          </select>
         </label>
         <label class="checkbox-label">
           <input v-model="bilingual" type="checkbox" />
           <span>{{ t("dialog.dualLanguageSrt") }}</span>
         </label>
       </div>
+      <p class="export-summary">{{ t("dialog.rowsToExport") }}: {{ rowCount }}</p>
 
       <div class="dialog-actions">
         <button type="button" @click="emit('close')">{{ t("common.cancel") }}</button>

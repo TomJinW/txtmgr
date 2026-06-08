@@ -8,6 +8,7 @@ export type LineLengthCharacterType =
   | "han"
   | "kana"
   | "hangul"
+  | "fullwidth_letters"
   | "fullwidth"
   | "halfwidth"
   | "token"
@@ -26,6 +27,7 @@ const characterTypeOptions: { labelKey: Parameters<typeof t>[0]; value: LineLeng
   { labelKey: "encoding.han", value: "han" },
   { labelKey: "encoding.kana", value: "kana" },
   { labelKey: "encoding.hangul", value: "hangul" },
+  { labelKey: "stats.fullwidthLetters", value: "fullwidth_letters" },
   { labelKey: "stats.fullwidth", value: "fullwidth" },
   { labelKey: "stats.halfwidth", value: "halfwidth" },
   { labelKey: "stats.token", value: "token" },

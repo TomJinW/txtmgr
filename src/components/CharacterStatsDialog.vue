@@ -15,12 +15,16 @@ const props = withDefaults(defineProps<{
   rowCountLabel?: string;
   runLabel?: string;
   showIgnoreWhitespace?: boolean;
+  showTextScope?: boolean;
+  textRowCount?: number;
   title?: string;
 }>(), {
   alwaysShowProgress: false,
   isRunning: false,
   progressValue: 0,
   showIgnoreWhitespace: false,
+  showTextScope: false,
+  textRowCount: 0,
 });
 
 const emit = defineEmits<{
@@ -32,12 +36,24 @@ const emit = defineEmits<{
 const scope = defineModel<"all" | "filtered" | "selected">("scope", {
   required: true,
 });
+const textScope = defineModel<"all" | "filtered" | "selected">("textScope", {
+  default: "all",
+});
 const includeAllCharacters = defineModel<boolean>("includeAllCharacters", {
   required: true,
 });
-const characterTypes = defineModel<
-  ("western" | "han" | "kana" | "hangul" | "fullwidth" | "halfwidth" | "token")[]
->("characterTypes", { required: true });
+type CharacterType =
+  | "western"
+  | "han"
+  | "kana"
+  | "hangul"
+  | "fullwidth_letters"
+  | "fullwidth"
+  | "halfwidth"
+  | "token"
+  | "other";
+
+const characterTypes = defineModel<CharacterType[]>("characterTypes", { required: true });
 const sortOrder = defineModel<"desc" | "asc">("sortOrder", { required: true });
 const bracketTokenTypes = defineModel<("square" | "curly" | "angle")[]>(
   "bracketTokenTypes",
@@ -48,6 +64,20 @@ const resultBox = ref<HTMLTextAreaElement | null>(null);
 const displayTitle = computed(() => props.title ?? t("stats.characterCount"));
 const displayRowCountLabel = computed(() => props.rowCountLabel ?? t("stats.rowsCounted"));
 const displayRunLabel = computed(() => props.runLabel ?? t("stats.run"));
+const isAllCharactersActive = computed(
+  () => includeAllCharacters.value || characterTypes.value.length === 0,
+);
+const characterTypeOptions: { labelKey: Parameters<typeof t>[0]; value: CharacterType }[] = [
+  { labelKey: "stats.western", value: "western" },
+  { labelKey: "encoding.han", value: "han" },
+  { labelKey: "encoding.kana", value: "kana" },
+  { labelKey: "encoding.hangul", value: "hangul" },
+  { labelKey: "stats.fullwidthLetters", value: "fullwidth_letters" },
+  { labelKey: "stats.fullwidth", value: "fullwidth" },
+  { labelKey: "stats.halfwidth", value: "halfwidth" },
+  { labelKey: "stats.token", value: "token" },
+  { labelKey: "stats.other", value: "other" },
+];
 
 onMounted(() => {
   window.addEventListener("keydown", handleDialogKeydown);
@@ -71,6 +101,27 @@ function handleDialogKeydown(event: KeyboardEvent) {
   event.preventDefault();
   emit("close");
 }
+
+function selectAllCharacterTypes() {
+  includeAllCharacters.value = true;
+  characterTypes.value = [];
+}
+
+function setCharacterType(type: CharacterType, checked: boolean) {
+  const selectedTypes = new Set(characterTypes.value);
+  if (checked) {
+    selectedTypes.add(type);
+  } else {
+    selectedTypes.delete(type);
+  }
+
+  characterTypes.value = Array.from(selectedTypes);
+  includeAllCharacters.value = selectedTypes.size === 0;
+}
+
+function isCharacterTypeActive(type: CharacterType) {
+  return !isAllCharactersActive.value && characterTypes.value.includes(type);
+}
 </script>
 
 <template>
@@ -86,8 +137,16 @@ function handleDialogKeydown(event: KeyboardEvent) {
 
       <div class="character-stats-options">
         <label>
-          <span>{{ t("stats.rows") }}</span>
+          <span>{{ showTextScope ? t("stats.encodingRows") : t("stats.rows") }}</span>
           <select v-model="scope">
+            <option value="all">{{ t("stats.allRows") }}</option>
+            <option value="filtered">{{ t("stats.filteredRows") }}</option>
+            <option value="selected">{{ t("stats.selectedRows") }}</option>
+          </select>
+        </label>
+        <label v-if="showTextScope">
+          <span>{{ t("stats.textRows") }}</span>
+          <select v-model="textScope">
             <option value="all">{{ t("stats.allRows") }}</option>
             <option value="filtered">{{ t("stats.filteredRows") }}</option>
             <option value="selected">{{ t("stats.selectedRows") }}</option>
@@ -104,77 +163,35 @@ function handleDialogKeydown(event: KeyboardEvent) {
 
       <div class="character-stats-summary">
         <span>{{ displayRowCountLabel }}: {{ rowCount }}</span>
+        <span v-if="showTextScope">{{ t("stats.textRows") }}: {{ textRowCount }}</span>
       </div>
 
       <fieldset class="option-group">
         <legend>{{ t("stats.characterTypes") }}</legend>
-        <label class="checkbox-line">
-          <input v-model="includeAllCharacters" type="checkbox" />
-          <span>{{ t("common.all") }}</span>
-        </label>
-        <label class="checkbox-line">
-          <input
-            v-model="characterTypes"
-            type="checkbox"
-            value="western"
-            :disabled="includeAllCharacters"
-          />
-          <span>{{ t("stats.western") }}</span>
-        </label>
-        <label class="checkbox-line">
-          <input
-            v-model="characterTypes"
-            type="checkbox"
-            value="han"
-            :disabled="includeAllCharacters"
-          />
-          <span>{{ t("encoding.han") }}</span>
-        </label>
-        <label class="checkbox-line">
-          <input
-            v-model="characterTypes"
-            type="checkbox"
-            value="kana"
-            :disabled="includeAllCharacters"
-          />
-          <span>{{ t("encoding.kana") }}</span>
-        </label>
-        <label class="checkbox-line">
-          <input
-            v-model="characterTypes"
-            type="checkbox"
-            value="hangul"
-            :disabled="includeAllCharacters"
-          />
-          <span>{{ t("encoding.hangul") }}</span>
-        </label>
-        <label class="checkbox-line">
-          <input
-            v-model="characterTypes"
-            type="checkbox"
-            value="fullwidth"
-            :disabled="includeAllCharacters"
-          />
-          <span>{{ t("stats.fullwidth") }}</span>
-        </label>
-        <label class="checkbox-line">
-          <input
-            v-model="characterTypes"
-            type="checkbox"
-            value="halfwidth"
-            :disabled="includeAllCharacters"
-          />
-          <span>{{ t("stats.halfwidth") }}</span>
-        </label>
-        <label class="checkbox-line">
-          <input
-            v-model="characterTypes"
-            type="checkbox"
-            value="token"
-            :disabled="includeAllCharacters"
-          />
-          <span>{{ t("stats.token") }}</span>
-        </label>
+        <div class="choice-button-group">
+          <button
+            type="button"
+            class="choice-button"
+            :class="{ active: isAllCharactersActive }"
+            :aria-pressed="isAllCharactersActive"
+            @click="selectAllCharacterTypes"
+          >
+            {{ t("common.all") }}
+          </button>
+          <label
+            v-for="option in characterTypeOptions"
+            :key="option.value"
+            class="choice-button"
+            :class="{ active: isCharacterTypeActive(option.value) }"
+          >
+            <input
+              type="checkbox"
+              :checked="isCharacterTypeActive(option.value)"
+              @change="setCharacterType(option.value, ($event.target as HTMLInputElement).checked)"
+            />
+            {{ t(option.labelKey) }}
+          </label>
+        </div>
       </fieldset>
 
       <fieldset class="option-group">
@@ -311,6 +328,50 @@ function handleDialogKeydown(event: KeyboardEvent) {
 .checkbox-line input {
   flex: 0 0 auto;
   accent-color: var(--primary);
+}
+
+.choice-button-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  align-items: center;
+}
+
+.choice-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 28px;
+  border: 1px solid var(--control-border);
+  border-radius: 6px;
+  padding: 4px 10px;
+  color: var(--control-text);
+  background: var(--panel-bg);
+  font-family:
+    -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB",
+    "Microsoft YaHei", "Noto Sans CJK SC", "Segoe UI", sans-serif;
+  font-size: 13px;
+  line-height: 1.25;
+  cursor: pointer;
+  user-select: none;
+}
+
+.choice-button input {
+  position: absolute;
+  inline-size: 1px;
+  block-size: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.choice-button:hover {
+  border-color: var(--primary-hover);
+}
+
+.choice-button.active {
+  border-color: var(--primary-hover);
+  color: var(--on-accent);
+  background: var(--primary);
 }
 
 .option-group {

@@ -35,7 +35,29 @@ type TranslationKey =
   | "common.theme"
   | "menu.file"
   | "menu.tools"
+  | "menu.hex"
   | "menu.statistics"
+  | "find.title"
+  | "find.find"
+  | "find.findPlaceholder"
+  | "find.replace"
+  | "find.replacePlaceholder"
+  | "find.match"
+  | "find.matches"
+  | "find.searchColumns"
+  | "find.previous"
+  | "find.next"
+  | "find.replaceAll"
+  | "find.replaceAllConfirm"
+  | "find.replaceAllTitle"
+  | "find.replacedCells"
+  | "find.noMatch"
+  | "insertRows.title"
+  | "insertRows.helpPrefix"
+  | "insertRows.targetRow"
+  | "insertRows.count"
+  | "insertRows.invalid"
+  | "insertRows.inserted"
   | "theme.system"
   | "theme.light"
   | "theme.dark"
@@ -85,6 +107,18 @@ type TranslationKey =
   | "encoding.exportTbl"
   | "encoding.importExcel"
   | "encoding.exportExcel"
+  | "encoding.codeShiftTitle"
+  | "encoding.codeShiftFormula"
+  | "encoding.codeShiftOperation"
+  | "encoding.codeShiftAdd"
+  | "encoding.codeShiftSubtract"
+  | "encoding.codeShiftBase"
+  | "encoding.codeShiftHex"
+  | "encoding.codeShiftDecimal"
+  | "encoding.codeShiftInvalidInput"
+  | "encoding.codeShiftConfirm"
+  | "encoding.codeShiftChanged"
+  | "encoding.codeShiftSkipped"
   | "encoding.encodingList"
   | "encoding.duplicateCharacter"
   | "encoding.duplicateCode"
@@ -105,6 +139,11 @@ type TranslationKey =
   | "dialog.startRow"
   | "dialog.outputEncoding"
   | "dialog.filteredOnly"
+  | "dialog.exportScope"
+  | "dialog.scopeAllRows"
+  | "dialog.scopeFilteredRows"
+  | "dialog.scopeSelectedRows"
+  | "dialog.rowsToExport"
   | "dialog.appendRows"
   | "dialog.keepRowNumber"
   | "dialog.splitByFileName"
@@ -343,15 +382,19 @@ type TranslationKey =
   | "stats.asc"
   | "stats.ignoreWhitespace"
   | "stats.rows"
+  | "stats.encodingRows"
+  | "stats.textRows"
   | "stats.rowsCounted"
   | "stats.allRows"
   | "stats.filteredRows"
   | "stats.selectedRows"
   | "stats.sort"
   | "stats.western"
+  | "stats.fullwidthLetters"
   | "stats.fullwidth"
   | "stats.halfwidth"
   | "stats.token"
+  | "stats.other"
   | "stats.bracketTokens"
   | "stats.cleanup"
   | "stats.running"
@@ -427,7 +470,29 @@ const translations: Record<AppLanguage, Record<TranslationKey, string>> = {
     "common.theme": "Theme",
     "menu.file": "File",
     "menu.tools": "Tools",
+    "menu.hex": "Hex",
     "menu.statistics": "Statistics",
+    "find.title": "Find and Replace",
+    "find.find": "Find",
+    "find.findPlaceholder": "Find text...",
+    "find.replace": "Replace",
+    "find.replacePlaceholder": "Replacement...",
+    "find.match": "Match",
+    "find.matches": "Matches",
+    "find.searchColumns": "Search columns",
+    "find.previous": "Previous",
+    "find.next": "Next",
+    "find.replaceAll": "Replace All",
+    "find.replaceAllConfirm": "Replace all matches in the current filtered rows?",
+    "find.replaceAllTitle": "Replace All",
+    "find.replacedCells": "Replaced cells",
+    "find.noMatch": "No matches found.",
+    "insertRows.title": "Insert Rows",
+    "insertRows.helpPrefix": "Target row can be",
+    "insertRows.targetRow": "Insert at row",
+    "insertRows.count": "Rows",
+    "insertRows.invalid": "Invalid row or count.",
+    "insertRows.inserted": "Inserted rows",
     "theme.system": "System",
     "theme.light": "Light",
     "theme.dark": "Dark",
@@ -477,6 +542,18 @@ const translations: Record<AppLanguage, Record<TranslationKey, string>> = {
     "encoding.exportTbl": "Export TBL",
     "encoding.importExcel": "Import Excel",
     "encoding.exportExcel": "Export Excel",
+    "encoding.codeShiftTitle": "Shift Selected Codes",
+    "encoding.codeShiftFormula": "New code = source code +/- (x + 0x100 * y)",
+    "encoding.codeShiftOperation": "Operation",
+    "encoding.codeShiftAdd": "Add",
+    "encoding.codeShiftSubtract": "Subtract",
+    "encoding.codeShiftBase": "Input base",
+    "encoding.codeShiftHex": "Hex",
+    "encoding.codeShiftDecimal": "Decimal",
+    "encoding.codeShiftInvalidInput": "Invalid code shift input.",
+    "encoding.codeShiftConfirm": "Apply code shift to selected rows?",
+    "encoding.codeShiftChanged": "Shifted codes",
+    "encoding.codeShiftSkipped": "Skipped",
     "encoding.encodingList": "Encoding list",
     "encoding.duplicateCharacter": "Duplicate character",
     "encoding.duplicateCode": "Duplicate code",
@@ -497,6 +574,11 @@ const translations: Record<AppLanguage, Record<TranslationKey, string>> = {
     "dialog.startRow": "Start row",
     "dialog.outputEncoding": "Output encoding",
     "dialog.filteredOnly": "Export current filtered results",
+    "dialog.exportScope": "Rows to export",
+    "dialog.scopeAllRows": "All rows",
+    "dialog.scopeFilteredRows": "Filtered rows",
+    "dialog.scopeSelectedRows": "Selected rows",
+    "dialog.rowsToExport": "Rows to export",
     "dialog.appendRows": "Append imported rows to the end",
     "dialog.keepRowNumber": "Keep row number column",
     "dialog.splitByFileName": "Use file_name as separate sheets",
@@ -735,15 +817,19 @@ const translations: Record<AppLanguage, Record<TranslationKey, string>> = {
     "stats.asc": "Ascending",
     "stats.ignoreWhitespace": "Ignore whitespace",
     "stats.rows": "Rows",
+    "stats.encodingRows": "Encoding rows",
+    "stats.textRows": "Text rows",
     "stats.rowsCounted": "Rows counted",
     "stats.allRows": "All rows",
     "stats.filteredRows": "Filtered rows",
     "stats.selectedRows": "Selected rows",
     "stats.sort": "Sort",
     "stats.western": "Western",
+    "stats.fullwidthLetters": "Fullwidth letters",
     "stats.fullwidth": "Fullwidth punctuation/digits",
     "stats.halfwidth": "Halfwidth punctuation/digits",
     "stats.token": "Token",
+    "stats.other": "Others",
     "stats.bracketTokens": "Bracket tokens",
     "stats.cleanup": "Cleanup",
     "stats.running": "Running",
@@ -818,7 +904,29 @@ const translations: Record<AppLanguage, Record<TranslationKey, string>> = {
     "common.theme": "主题",
     "menu.file": "文件",
     "menu.tools": "工具",
+    "menu.hex": "Hex",
     "menu.statistics": "统计",
+    "find.title": "查找与替换",
+    "find.find": "查找",
+    "find.findPlaceholder": "查找文本...",
+    "find.replace": "替换",
+    "find.replacePlaceholder": "替换为...",
+    "find.match": "匹配",
+    "find.matches": "匹配项",
+    "find.searchColumns": "搜索列",
+    "find.previous": "上一个",
+    "find.next": "下一个",
+    "find.replaceAll": "全部替换",
+    "find.replaceAllConfirm": "要替换当前过滤行里的所有匹配项吗？",
+    "find.replaceAllTitle": "全部替换",
+    "find.replacedCells": "已替换单元格",
+    "find.noMatch": "没有找到匹配项。",
+    "insertRows.title": "插入行",
+    "insertRows.helpPrefix": "目标行可以是",
+    "insertRows.targetRow": "在第几行插入",
+    "insertRows.count": "行数",
+    "insertRows.invalid": "行号或行数无效。",
+    "insertRows.inserted": "已插入行",
     "theme.system": "跟随系统",
     "theme.light": "浅色",
     "theme.dark": "深色",
@@ -868,6 +976,18 @@ const translations: Record<AppLanguage, Record<TranslationKey, string>> = {
     "encoding.exportTbl": "导出 TBL",
     "encoding.importExcel": "导入 Excel",
     "encoding.exportExcel": "导出 Excel",
+    "encoding.codeShiftTitle": "批量增减选中编码",
+    "encoding.codeShiftFormula": "新编码 = 源数据 +/- (x + 0x100 * y)",
+    "encoding.codeShiftOperation": "操作",
+    "encoding.codeShiftAdd": "增加",
+    "encoding.codeShiftSubtract": "减少",
+    "encoding.codeShiftBase": "输入进制",
+    "encoding.codeShiftHex": "16 进制",
+    "encoding.codeShiftDecimal": "10 进制",
+    "encoding.codeShiftInvalidInput": "批量增减编码输入无效。",
+    "encoding.codeShiftConfirm": "要对选中行应用编码增减吗？",
+    "encoding.codeShiftChanged": "已调整编码",
+    "encoding.codeShiftSkipped": "已跳过",
     "encoding.encodingList": "码表列表",
     "encoding.duplicateCharacter": "重复字符",
     "encoding.duplicateCode": "重复编码",
@@ -888,6 +1008,11 @@ const translations: Record<AppLanguage, Record<TranslationKey, string>> = {
     "dialog.startRow": "起始行",
     "dialog.outputEncoding": "输出编码",
     "dialog.filteredOnly": "只导出当前过滤结果",
+    "dialog.exportScope": "导出范围",
+    "dialog.scopeAllRows": "全部行",
+    "dialog.scopeFilteredRows": "过滤行",
+    "dialog.scopeSelectedRows": "选中行",
+    "dialog.rowsToExport": "将导出行数",
     "dialog.appendRows": "追加到列表末尾",
     "dialog.keepRowNumber": "保留行号列",
     "dialog.splitByFileName": "按 file_name 分 sheet",
@@ -1126,15 +1251,19 @@ const translations: Record<AppLanguage, Record<TranslationKey, string>> = {
     "stats.asc": "升序",
     "stats.ignoreWhitespace": "忽略空白字符",
     "stats.rows": "行",
+    "stats.encodingRows": "Encoding 行",
+    "stats.textRows": "文本行",
     "stats.rowsCounted": "统计行数",
     "stats.allRows": "全部行",
     "stats.filteredRows": "过滤行",
     "stats.selectedRows": "选中行",
     "stats.sort": "排序",
     "stats.western": "西文",
+    "stats.fullwidthLetters": "全角字母",
     "stats.fullwidth": "全角标点/数字",
     "stats.halfwidth": "半角标点/数字",
     "stats.token": "Token",
+    "stats.other": "其他",
     "stats.bracketTokens": "括号 Token",
     "stats.cleanup": "清理",
     "stats.running": "运行中",

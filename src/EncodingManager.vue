@@ -13,6 +13,8 @@ import { readFile, writeFile, writeTextFile } from "@tauri-apps/plugin-fs";
 import {
   cjkFallbackOptions,
   draftStorageKey as sentenceDraftStorageKey,
+  encodingExcelExportScopeStorageKey,
+  encodingTextExportScopeStorageKey,
 } from "./constants";
 import {
   currentLanguage,
@@ -32,6 +34,10 @@ import {
 } from "./excel";
 import CharacterStatsDialog from "./components/CharacterStatsDialog.vue";
 import BulkColumnDialog, { type BulkEditableColumn } from "./components/BulkColumnDialog.vue";
+import EncodingCodeShiftDialog, {
+  type CodeShiftBase,
+  type CodeShiftOperation,
+} from "./components/EncodingCodeShiftDialog.vue";
 import EncodingLineLengthDialog, {
   type LineLengthBracketTokenType,
   type LineLengthCharacterType,
@@ -43,9 +49,18 @@ import EncodingExcelExportDialog from "./components/EncodingExcelExportDialog.vu
 import EncodingExportDialog from "./components/EncodingExportDialog.vue";
 import EncodingImportDialog from "./components/EncodingImportDialog.vue";
 import EncodingSearchControls from "./components/EncodingSearchControls.vue";
+import FindReplaceBar, { type FindReplaceColumn } from "./components/FindReplaceBar.vue";
 import GoToRowDialog from "./components/GoToRowDialog.vue";
+import InsertRowsDialog from "./components/InsertRowsDialog.vue";
 import LanguageDialog from "./components/LanguageDialog.vue";
-import type { CjkFallbackMode, EncodingRow, SentenceRow, StoredDraft, ThemeMode } from "./types";
+import type {
+  CjkFallbackMode,
+  EncodingRow,
+  ExportScope,
+  SentenceRow,
+  StoredDraft,
+  ThemeMode,
+} from "./types";
 
 type EncodingFilter =
   | "duplicate_character"
@@ -64,9 +79,11 @@ type CoverageCharacterType =
   | "han"
   | "kana"
   | "hangul"
+  | "fullwidth_letters"
   | "fullwidth"
   | "halfwidth"
-  | "token";
+  | "token"
+  | "other";
 
 type CoverageBracketTokenType = "square" | "curly" | "angle";
 
@@ -143,12 +160,28 @@ const bulkEditableColumns: { key: BulkEditableColumn; label: string }[] = [
 ];
 const bulkColumnKey = ref<BulkEditableColumn>(restoreBulkColumnKey());
 const bulkColumnValue = ref("");
+const codeShiftColumn = ref<keyof EncodingRow>("code");
+const codeShiftOperation = ref<CodeShiftOperation>("add");
+const codeShiftBase = ref<CodeShiftBase>("hex");
+const codeShiftXValue = ref("0");
+const codeShiftYValue = ref("0");
 const pendingDeleteIndex = ref<number | null>(null);
 const goToRowValue = ref("");
 const rowFilterStart = ref("");
 const rowFilterEnd = ref("");
+const insertRowsTargetRow = ref("1");
+const insertRowsCount = ref("1");
+const isFindReplaceOpen = ref(false);
+const findReplaceQuery = ref("");
+const findReplaceReplacement = ref("");
+const findReplaceMatchMode = ref<"contains" | "exact">("contains");
+const isFindReplaceCaseSensitive = ref(false);
+const findReplaceColumns = ref<(keyof EncodingRow)[]>([...searchableColumns]);
+const currentFindMatchIndex = ref(0);
 const isGoToRowDialogOpen = ref(false);
+const isInsertRowsDialogOpen = ref(false);
 const isBulkColumnDialogOpen = ref(false);
+const isCodeShiftDialogOpen = ref(false);
 const isUnmappedCharactersDialogOpen = ref(false);
 const isUnusedEncodingsDialogOpen = ref(false);
 const isLineLengthDialogOpen = ref(false);
@@ -173,7 +206,7 @@ const excelImportAppendRows = ref(false);
 const isExportDialogOpen = ref(false);
 const isExportingText = ref(false);
 const exportPath = ref("");
-const exportFilteredOnly = ref(false);
+const exportScope = ref<ExportScope>(restoreExportScope(encodingTextExportScopeStorageKey));
 const exportExtension = ref<"txt" | "tbl">("txt");
 const exportDirection = ref<"code_char" | "char_code">("code_char");
 const exportNewline = ref<"crlf" | "lf">("crlf");
@@ -181,7 +214,23 @@ const exportFileEncoding = ref<"utf8" | "utf16le">("utf8");
 const isExcelExportDialogOpen = ref(false);
 const isExportingExcel = ref(false);
 const excelExportPath = ref("");
-const excelExportFilteredOnly = ref(false);
+const excelExportScope = ref<ExportScope>(restoreExportScope(encodingExcelExportScopeStorageKey));
+const isCharacterStatsDialogOpen = ref(false);
+const characterStatsScope = ref<"all" | "filtered" | "selected">("filtered");
+const characterStatsTextScope = ref<"all" | "filtered" | "selected">("filtered");
+const characterStatsIncludeAll = ref(true);
+const characterStatsTypes = ref<CoverageCharacterType[]>([]);
+const characterStatsSortOrder = ref<"desc" | "asc">("desc");
+const characterStatsBracketTokenTypes = ref<CoverageBracketTokenType[]>([
+  "square",
+  "curly",
+  "angle",
+]);
+const characterStatsIgnoreWhitespace = ref(true);
+const isCountingCharacterStats = ref(false);
+const characterStatsProgress = ref(0);
+const characterStatsResult = ref("");
+const characterStatsMessage = ref(t("stats.notCountedYet"));
 const unmappedScope = ref<"all" | "filtered" | "selected">("filtered");
 const unmappedIncludeAllCharacters = ref(true);
 const unmappedCharacterTypes = ref<CoverageCharacterType[]>([]);
@@ -221,6 +270,7 @@ const lineLengthBracketTokenTypes = ref<LineLengthBracketTokenType[]>([
 ]);
 const lineLengthWidthRules = ref<Record<LineLengthCharacterType, LineLengthWidthRule>>({
   fullwidth: { fixed: 1, mode: "encoding" },
+  fullwidth_letters: { fixed: 1, mode: "encoding" },
   halfwidth: { fixed: 1, mode: "encoding" },
   han: { fixed: 1, mode: "encoding" },
   hangul: { fixed: 1, mode: "encoding" },
@@ -258,10 +308,12 @@ let unlistenEncodingReadJson: UnlistenFn | undefined;
 let unlistenEncodingSaveJson: UnlistenFn | undefined;
 let unlistenEncodingSaveJsonAs: UnlistenFn | undefined;
 let unlistenEncodingOpenSearchPanel: UnlistenFn | undefined;
+let unlistenEncodingOpenFindReplace: UnlistenFn | undefined;
 let unlistenEncodingImport: UnlistenFn | undefined;
 let unlistenEncodingImportExcel: UnlistenFn | undefined;
 let unlistenEncodingExport: UnlistenFn | undefined;
 let unlistenEncodingExportExcel: UnlistenFn | undefined;
+let unlistenEncodingOpenCharacterStats: UnlistenFn | undefined;
 let unlistenEncodingOpenUnmappedCharacters: UnlistenFn | undefined;
 let unlistenEncodingOpenUnusedEncodings: UnlistenFn | undefined;
 let unlistenEncodingOpenLineLength: UnlistenFn | undefined;
@@ -272,6 +324,8 @@ let unlistenEncodingCopySelected: UnlistenFn | undefined;
 let unlistenEncodingSelectAllFiltered: UnlistenFn | undefined;
 let unlistenEncodingDeselectAllRows: UnlistenFn | undefined;
 let unlistenEncodingBulkColumn: UnlistenFn | undefined;
+let unlistenEncodingCodeShift: UnlistenFn | undefined;
+let unlistenEncodingInsertRows: UnlistenFn | undefined;
 let unlistenEncodingToggleTopPanel: UnlistenFn | undefined;
 let unlistenSetLanguage: UnlistenFn | undefined;
 let unlistenOpenLanguageDialog: UnlistenFn | undefined;
@@ -366,6 +420,48 @@ const filteredRows = computed(() => {
     });
 });
 
+type EncodingFindReplaceMatch = {
+  columnKey: keyof EncodingRow;
+  filteredIndex: number;
+  row: EncodingRow;
+  rowIndex: number;
+};
+
+const availableFindReplaceColumns = computed<FindReplaceColumn[]>(() => {
+  const visibleKeys = new Set(displayedColumns.value.map((column) => column.key));
+  return columns
+    .filter(
+      (column): column is Extract<(typeof columns)[number], { key: keyof EncodingRow }> =>
+        column.key !== "row_number" && visibleKeys.has(column.key),
+    )
+    .map((column) => ({ key: column.key, label: column.label }));
+});
+
+const findReplaceMatches = computed<EncodingFindReplaceMatch[]>(() => {
+  const query = findReplaceQuery.value;
+  if (query === "" || findReplaceColumns.value.length === 0) return [];
+
+  const activeColumns = findReplaceColumns.value.filter((columnKey) =>
+    availableFindReplaceColumns.value.some((column) => column.key === columnKey),
+  );
+  if (activeColumns.length === 0) return [];
+
+  const matches: EncodingFindReplaceMatch[] = [];
+  filteredRows.value.forEach(({ row, index }, filteredIndex) => {
+    for (const columnKey of activeColumns) {
+      if (findReplaceCellMatches(row[columnKey], query)) {
+        matches.push({ columnKey, filteredIndex, row, rowIndex: index });
+      }
+    }
+  });
+
+  return matches;
+});
+
+const currentFindReplaceMatch = computed(
+  () => findReplaceMatches.value[currentFindMatchIndex.value] ?? null,
+);
+
 const hasActiveRowFilter = computed(
   () =>
     String(rowFilterStart.value).trim() !== "" ||
@@ -440,12 +536,14 @@ const isSomeFilteredRowSelected = computed(() =>
 
 const selectedRowCount = computed(() => selectedRowIds.value.size);
 
+const characterStatsRowCount = computed(() => encodingRowsForCharacterStats().length);
+const characterStatsTextRowCount = computed(() => textRowsForCharacterStats().length);
 const unmappedRowCount = computed(() => sentenceRowsForUnmappedCheck().length);
 const unusedEncodingTextRowCount = computed(() => sentenceRowsForUnusedEncodingCheck().length);
 const lineLengthRowCount = computed(() => sentenceRowsForLineLengthCheck().length);
 
 const exportRowCount = computed(() =>
-  exportFilteredOnly.value ? filteredRows.value.length : rows.value.length,
+  rowsForTextExport().length,
 );
 
 const canExportText = computed(
@@ -470,7 +568,7 @@ const canImportExcel = computed(
 const canSaveJson = computed(() => rows.value.length > 0 && !isSavingJson.value);
 
 const excelExportRowCount = computed(() =>
-  excelExportFilteredOnly.value ? filteredRows.value.length : rows.value.length,
+  rowsForExcelExport().length,
 );
 
 const canExportExcel = computed(
@@ -508,6 +606,15 @@ watch(
   },
 );
 
+watch(availableFindReplaceColumns, (availableColumns) => {
+  const availableKeys = new Set(availableColumns.map((column) => column.key));
+  const nextColumns = findReplaceColumns.value.filter((column) => availableKeys.has(column));
+  findReplaceColumns.value =
+    nextColumns.length > 0
+      ? nextColumns
+      : availableColumns.map((column) => column.key as keyof EncodingRow);
+});
+
 watch(jsonPath, () => {
   queuePersistRows();
 });
@@ -537,6 +644,14 @@ watch(themeMode, () => {
 
 watch(bulkColumnKey, () => {
   persistBulkColumnKey();
+});
+
+watch(exportScope, () => {
+  persistExportScope(encodingTextExportScopeStorageKey, exportScope.value);
+});
+
+watch(excelExportScope, () => {
+  persistExportScope(encodingExcelExportScopeStorageKey, excelExportScope.value);
 });
 
 watch(isTopPanelVisible, () => {
@@ -579,6 +694,16 @@ watch(
   },
 );
 
+watch(findReplaceMatches, (matches) => {
+  if (matches.length === 0) {
+    currentFindMatchIndex.value = 0;
+    return;
+  }
+  if (currentFindMatchIndex.value >= matches.length) {
+    currentFindMatchIndex.value = matches.length - 1;
+  }
+});
+
 watch(renderedRows, () => {
   const renderedRowIds = new Set(
     renderedRows.value.map(({ row }) => getRowIdentity(row)),
@@ -611,10 +736,12 @@ onBeforeUnmount(() => {
   unlistenEncodingSaveJson?.();
   unlistenEncodingSaveJsonAs?.();
   unlistenEncodingOpenSearchPanel?.();
+  unlistenEncodingOpenFindReplace?.();
   unlistenEncodingImport?.();
   unlistenEncodingImportExcel?.();
   unlistenEncodingExport?.();
   unlistenEncodingExportExcel?.();
+  unlistenEncodingOpenCharacterStats?.();
   unlistenEncodingOpenUnmappedCharacters?.();
   unlistenEncodingOpenUnusedEncodings?.();
   unlistenEncodingOpenLineLength?.();
@@ -625,6 +752,8 @@ onBeforeUnmount(() => {
   unlistenEncodingSelectAllFiltered?.();
   unlistenEncodingDeselectAllRows?.();
   unlistenEncodingBulkColumn?.();
+  unlistenEncodingCodeShift?.();
+  unlistenEncodingInsertRows?.();
   unlistenEncodingToggleTopPanel?.();
   unlistenSetLanguage?.();
   unlistenOpenLanguageDialog?.();
@@ -688,13 +817,17 @@ function handleWindowsMenuShortcut(event: KeyboardEvent) {
     { action: "encoding_export", run: () => openExportDialog() },
     { action: "encoding_export_excel", run: () => openExcelExportDialog() },
     { action: "encoding_go_to_row", run: () => openGoToRowDialog() },
+    { action: "encoding_open_find_replace", run: () => toggleFindReplaceBar() },
     { action: "encoding_clear_list", run: () => void clearRows() },
     { action: "encoding_delete_selected", run: () => void deleteSelectedRows() },
     { action: "encoding_copy_selected", run: () => void copySelectedRowsForSpreadsheet() },
     { action: "encoding_select_all_filtered", run: () => selectAllFilteredRows() },
     { action: "encoding_deselect_all_rows", run: () => deselectAllRows() },
+    { action: "encoding_insert_rows", run: () => openInsertRowsDialog("end") },
     { action: "encoding_bulk_change_column", run: () => openBulkColumnDialog() },
+    { action: "encoding_code_shift", run: () => openCodeShiftDialog() },
     { action: "encoding_toggle_top_panel", run: () => toggleTopPanel() },
+    { action: "encoding_character_stats", run: () => void openCharacterStatsDialog() },
     { action: "encoding_unmapped_characters", run: () => void openUnmappedCharactersDialog() },
     { action: "encoding_unused_encodings", run: () => void openUnusedEncodingsDialog() },
     { action: "encoding_line_length", run: () => void openLineLengthDialog() },
@@ -750,6 +883,16 @@ function registerMenuListeners() {
     })
     .catch((error) => {
       console.warn("Failed to register encoding search panel menu listener.", error);
+    });
+
+  listen("encoding-open-find-replace", () => {
+    toggleFindReplaceBar();
+  })
+    .then((unlisten) => {
+      unlistenEncodingOpenFindReplace = unlisten;
+    })
+    .catch((error) => {
+      console.warn("Failed to register encoding find replace menu listener.", error);
     });
 
   listen("encoding-import", () => {
@@ -852,6 +995,26 @@ function registerMenuListeners() {
       console.warn("Failed to register encoding bulk column menu listener.", error);
     });
 
+  listen("encoding-code-shift", () => {
+    openCodeShiftDialog();
+  })
+    .then((unlisten) => {
+      unlistenEncodingCodeShift = unlisten;
+    })
+    .catch((error) => {
+      console.warn("Failed to register encoding code shift menu listener.", error);
+    });
+
+  listen("encoding-insert-rows", () => {
+    openInsertRowsDialog("end");
+  })
+    .then((unlisten) => {
+      unlistenEncodingInsertRows = unlisten;
+    })
+    .catch((error) => {
+      console.warn("Failed to register encoding insert rows menu listener.", error);
+    });
+
   listen("encoding-toggle-top-panel", () => {
     toggleTopPanel();
   })
@@ -870,6 +1033,16 @@ function registerMenuListeners() {
     })
     .catch((error) => {
       console.warn("Failed to register encoding export Excel menu listener.", error);
+    });
+
+  listen("encoding-open-character-stats", () => {
+    void openCharacterStatsDialog();
+  })
+    .then((unlisten) => {
+      unlistenEncodingOpenCharacterStats = unlisten;
+    })
+    .catch((error) => {
+      console.warn("Failed to register encoding character stats menu listener.", error);
     });
 
   listen("encoding-open-unmapped-characters", () => {
@@ -941,16 +1114,47 @@ function toText(value: unknown) {
   return typeof value === "string" ? value : "";
 }
 
-function addRowAtEnd() {
-  rows.value.push(createEmptyRow());
-  statusMessage.value = t("message.rowAdded");
-}
-
 function addRowAfter(rowIndex: number) {
   rows.value.splice(rowIndex + 1, 0, createEmptyRow());
   if (pendingDeleteIndex.value !== null && pendingDeleteIndex.value > rowIndex) {
     pendingDeleteIndex.value += 1;
   }
+}
+
+function openInsertRowsDialog(position: "start" | "end" = "end") {
+  insertRowsTargetRow.value = position === "start" ? "1" : String(rows.value.length + 1);
+  insertRowsCount.value = "1";
+  openEncodingDialog("insertRows");
+}
+
+function closeInsertRowsDialog() {
+  isInsertRowsDialogOpen.value = false;
+}
+
+function confirmInsertRows() {
+  const targetRow = Number.parseInt(insertRowsTargetRow.value, 10);
+  const count = Number.parseInt(insertRowsCount.value, 10);
+  const maxRow = rows.value.length + 1;
+  if (
+    !Number.isInteger(targetRow) ||
+    !Number.isInteger(count) ||
+    targetRow < 1 ||
+    targetRow > maxRow ||
+    count < 1
+  ) {
+    errorMessage.value = t("insertRows.invalid");
+    statusMessage.value = "";
+    return;
+  }
+
+  const insertIndex = targetRow - 1;
+  rows.value.splice(insertIndex, 0, ...Array.from({ length: count }, createEmptyRow));
+  if (pendingDeleteIndex.value !== null && pendingDeleteIndex.value >= insertIndex) {
+    pendingDeleteIndex.value += count;
+  }
+  closeInsertRowsDialog();
+  statusMessage.value = `${t("insertRows.inserted")}: ${count}.`;
+  errorMessage.value = "";
 }
 
 async function openJsonFile() {
@@ -1100,10 +1304,13 @@ async function confirmImportOverwrite(title: string) {
 
 type EncodingDialog =
   | "bulkColumn"
+  | "codeShift"
+  | "characterStats"
   | "excelExport"
   | "excelImport"
   | "exportText"
   | "goToRow"
+  | "insertRows"
   | "importText"
   | "language"
   | "lineLength"
@@ -1133,6 +1340,12 @@ function openEncodingDialog(dialog: EncodingDialog) {
     case "bulkColumn":
       isBulkColumnDialogOpen.value = true;
       break;
+    case "codeShift":
+      isCodeShiftDialogOpen.value = true;
+      break;
+    case "characterStats":
+      isCharacterStatsDialogOpen.value = true;
+      break;
     case "excelExport":
       isExcelExportDialogOpen.value = true;
       break;
@@ -1144,6 +1357,9 @@ function openEncodingDialog(dialog: EncodingDialog) {
       break;
     case "goToRow":
       isGoToRowDialogOpen.value = true;
+      break;
+    case "insertRows":
+      isInsertRowsDialogOpen.value = true;
       break;
     case "importText":
       isImportDialogOpen.value = true;
@@ -1167,10 +1383,13 @@ function openEncodingDialog(dialog: EncodingDialog) {
 
 function closeEncodingDialogs() {
   isBulkColumnDialogOpen.value = false;
+  isCodeShiftDialogOpen.value = false;
+  isCharacterStatsDialogOpen.value = false;
   isExcelExportDialogOpen.value = false;
   isExcelImportDialogOpen.value = false;
   isExportDialogOpen.value = false;
   isGoToRowDialogOpen.value = false;
+  isInsertRowsDialogOpen.value = false;
   isImportDialogOpen.value = false;
   isLanguageDialogOpen.value = false;
   isLineLengthDialogOpen.value = false;
@@ -1182,9 +1401,12 @@ function hasOpenEncodingDialog() {
   return (
     isExcelExportDialogOpen.value ||
     isBulkColumnDialogOpen.value ||
+    isCodeShiftDialogOpen.value ||
+    isCharacterStatsDialogOpen.value ||
     isExcelImportDialogOpen.value ||
     isExportDialogOpen.value ||
     isGoToRowDialogOpen.value ||
+    isInsertRowsDialogOpen.value ||
     isImportDialogOpen.value ||
     isLanguageDialogOpen.value ||
     isLineLengthDialogOpen.value ||
@@ -1197,6 +1419,7 @@ function hasActiveEncodingDialogTask() {
   return (
     isCheckingUnmappedCharacters.value ||
     isCheckingUnusedEncodings.value ||
+    isCountingCharacterStats.value ||
     isCheckingLineLength.value ||
     isExportingExcel.value ||
     isExportingText.value ||
@@ -1219,6 +1442,15 @@ function openExcelImportDialog() {
 
 function closeExcelImportDialog() {
   isExcelImportDialogOpen.value = false;
+}
+
+async function openCharacterStatsDialog() {
+  if (!openEncodingDialog("characterStats")) return;
+  await refreshSentenceCoverageSource();
+}
+
+function closeCharacterStatsDialog() {
+  isCharacterStatsDialogOpen.value = false;
 }
 
 async function openUnmappedCharactersDialog() {
@@ -1268,6 +1500,25 @@ function sentenceRowsForLineLengthCheck() {
   void lineLengthSourceRefreshKey.value;
   const source = sentenceCoverageSource.value;
   const scopedRows = source[lineLengthScope.value];
+  if (scopedRows) return scopedRows;
+  return source.all ?? [];
+}
+
+function encodingRowsForCharacterStats() {
+  if (characterStatsScope.value === "filtered") {
+    return filteredRows.value.map(({ row }) => row);
+  }
+
+  if (characterStatsScope.value === "selected") {
+    return rows.value.filter((row) => selectedRowIds.value.has(getRowIdentity(row)));
+  }
+
+  return rows.value;
+}
+
+function textRowsForCharacterStats() {
+  const source = sentenceCoverageSource.value;
+  const scopedRows = source[characterStatsTextScope.value];
   if (scopedRows) return scopedRows;
   return source.all ?? [];
 }
@@ -1346,6 +1597,74 @@ function normalizeSentenceCoverageRows(rowsToNormalize: unknown) {
       translated_text: typeof item.translated_text === "string" ? item.translated_text : "",
     };
   });
+}
+
+async function runCharacterStats() {
+  if (isCountingCharacterStats.value) return;
+
+  isCountingCharacterStats.value = true;
+  characterStatsProgress.value = 0;
+  characterStatsMessage.value = t("stats.countingCharacters");
+  errorMessage.value = "";
+  await nextTick();
+
+  const encodingRows = encodingRowsForCharacterStats();
+  const textRows = textRowsForCharacterStats();
+  const targetTokens = new Set<string>();
+  const counts = new Map<string, number>();
+
+  try {
+    for (let rowIndex = 0; rowIndex < encodingRows.length; rowIndex += 1) {
+      const row = encodingRows[rowIndex];
+      for (const token of encodingCharacterStatsTokens(row.original_char)) {
+        targetTokens.add(token);
+        counts.set(token, 0);
+      }
+
+      if (rowIndex % 240 === 0 || rowIndex === encodingRows.length - 1) {
+        characterStatsProgress.value =
+          encodingRows.length === 0
+            ? 25
+            : Math.round(((rowIndex + 1) / encodingRows.length) * 25);
+        await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
+      }
+    }
+
+    for (let rowIndex = 0; rowIndex < textRows.length; rowIndex += 1) {
+      const row = textRows[rowIndex];
+      for (const token of encodingCharacterStatsTokens(row.translated_text)) {
+        if (!targetTokens.has(token)) continue;
+        counts.set(token, (counts.get(token) ?? 0) + 1);
+      }
+
+      if (rowIndex % 120 === 0 || rowIndex === textRows.length - 1) {
+        characterStatsProgress.value =
+          textRows.length === 0
+            ? 100
+            : 25 + Math.round(((rowIndex + 1) / textRows.length) * 75);
+        await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
+      }
+    }
+
+    const sortedRows = Array.from(counts.entries()).sort(([charA, countA], [charB, countB]) => {
+      const countDiff =
+        characterStatsSortOrder.value === "asc" ? countA - countB : countB - countA;
+      return countDiff === 0 ? charA.localeCompare(charB) : countDiff;
+    });
+
+    characterStatsResult.value = sortedRows
+      .map(([character, count]) => `${displayUnmappedToken(character)}\t${count}`)
+      .join("\n");
+
+    characterStatsMessage.value =
+      sortedRows.length === 0
+        ? `${t("message.noMatchingCharactersFound")}: ${encodingRows.length} ${t("stats.encodingRows")}; ${textRows.length} ${t("stats.textRows")}.`
+        : `${t("message.countedItemsFromRows")}: ${sortedRows.length} / ${encodingRows.length} ${t("stats.encodingRows")}; ${textRows.length} ${t("stats.textRows")}.`;
+    statusMessage.value = characterStatsMessage.value;
+  } finally {
+    characterStatsProgress.value = 100;
+    isCountingCharacterStats.value = false;
+  }
 }
 
 async function runUnmappedCharactersCheck() {
@@ -1608,6 +1927,7 @@ function lineLengthBracketedTokenAt(text: string, startIndex: number) {
 }
 
 function lineLengthCharacterType(character: string): LineLengthCharacterType {
+  if (characterMatchesSingleUnmappedType(character, "fullwidth_letters")) return "fullwidth_letters";
   if (characterMatchesSingleUnmappedType(character, "western")) return "western";
   if (characterMatchesSingleUnmappedType(character, "han")) return "han";
   if (characterMatchesSingleUnmappedType(character, "kana")) return "kana";
@@ -1615,6 +1935,58 @@ function lineLengthCharacterType(character: string): LineLengthCharacterType {
   if (characterMatchesSingleUnmappedType(character, "fullwidth")) return "fullwidth";
   if (characterMatchesSingleUnmappedType(character, "halfwidth")) return "halfwidth";
   return "other";
+}
+
+function encodingCharacterStatsTokens(text: string) {
+  const tokens: string[] = [];
+  let index = 0;
+
+  while (index < text.length) {
+    const bracketToken = characterStatsBracketedTokenAt(text, index);
+    if (bracketToken) {
+      if (characterStatsIncludeAll.value || characterStatsTypes.value.includes("token")) {
+        tokens.push(bracketToken.token);
+      }
+      index = bracketToken.endIndex;
+      continue;
+    }
+
+    const character = Array.from(text.slice(index))[0] ?? "";
+    index += character.length;
+    if (characterStatsIgnoreWhitespace.value && /\s/u.test(character)) continue;
+    if (characterMatchesCharacterStatsType(character)) {
+      tokens.push(character);
+    }
+  }
+
+  return tokens;
+}
+
+function characterStatsBracketedTokenAt(text: string, startIndex: number) {
+  const pairs: Record<string, { close: string; type: CoverageBracketTokenType }> = {
+    "[": { close: "]", type: "square" },
+    "{": { close: "}", type: "curly" },
+    "<": { close: ">", type: "angle" },
+  };
+  const open = text[startIndex];
+  const pair = pairs[open];
+  if (!pair || !characterStatsBracketTokenTypes.value.includes(pair.type)) return null;
+
+  const endIndex = text.indexOf(pair.close, startIndex + 1);
+  if (endIndex === -1) return null;
+
+  return {
+    endIndex: endIndex + pair.close.length,
+    token: text.slice(startIndex, endIndex + pair.close.length),
+  };
+}
+
+function characterMatchesCharacterStatsType(character: string) {
+  if (characterStatsIncludeAll.value) return true;
+  if (characterStatsTypes.value.length === 0) return false;
+  return characterStatsTypes.value.some((type) =>
+    characterMatchesSingleUnmappedType(character, type),
+  );
 }
 
 function unusedEncodingTextTokens(text: string) {
@@ -1755,16 +2127,21 @@ function characterMatchesUnmappedType(character: string) {
 function characterMatchesSingleUnmappedType(
   character: string,
   type: CoverageCharacterType,
-) {
+): boolean {
   switch (type) {
     case "western":
-      return /\p{Script=Latin}/u.test(character);
+      return (
+        /\p{Script=Latin}/u.test(character) &&
+        !characterMatchesSingleUnmappedType(character, "fullwidth_letters")
+      );
     case "han":
       return /\p{Script=Han}/u.test(character);
     case "kana":
       return /[\p{Script=Hiragana}\p{Script=Katakana}]/u.test(character);
     case "hangul":
       return /\p{Script=Hangul}/u.test(character);
+    case "fullwidth_letters":
+      return /[\uFF21-\uFF3A\uFF41-\uFF5A]/u.test(character);
     case "fullwidth":
       return /[\uFF10-\uFF19\uFF01-\uFF0F\uFF1A-\uFF20\uFF3B-\uFF40\uFF5B-\uFF65]/u.test(
         character,
@@ -1773,6 +2150,16 @@ function characterMatchesSingleUnmappedType(
       return /[0-9!-\/:-@[-`{-~]/u.test(character);
     case "token":
       return false;
+    case "other":
+      return !(
+        characterMatchesSingleUnmappedType(character, "western") ||
+        characterMatchesSingleUnmappedType(character, "han") ||
+        characterMatchesSingleUnmappedType(character, "kana") ||
+        characterMatchesSingleUnmappedType(character, "hangul") ||
+        characterMatchesSingleUnmappedType(character, "fullwidth_letters") ||
+        characterMatchesSingleUnmappedType(character, "fullwidth") ||
+        characterMatchesSingleUnmappedType(character, "halfwidth")
+      );
   }
 }
 
@@ -1783,6 +2170,21 @@ function displayUnmappedToken(token: string) {
   if (token === "\n") return "\\n";
   if (token === "\"") return "\\\"";
   return token;
+}
+
+async function copyCharacterStatsResult() {
+  if (characterStatsResult.value === "") return;
+
+  try {
+    await copyText(characterStatsResult.value);
+    characterStatsMessage.value = t("message.characterCountCopied");
+    statusMessage.value = characterStatsMessage.value;
+    errorMessage.value = "";
+  } catch (error) {
+    errorMessage.value =
+      error instanceof Error ? error.message : t("message.failedCopyCharacterCount");
+    statusMessage.value = "";
+  }
 }
 
 async function copyUnmappedCharactersResult() {
@@ -2114,9 +2516,17 @@ async function confirmExcelExport() {
 }
 
 function rowsForExcelExport() {
-  return excelExportFilteredOnly.value
-    ? filteredRows.value.map(({ row, index }) => ({ row, index }))
-    : rows.value.map((row, index) => ({ row, index }));
+  if (excelExportScope.value === "filtered") {
+    return filteredRows.value.map(({ row, index }) => ({ row, index }));
+  }
+
+  if (excelExportScope.value === "selected") {
+    return rows.value
+      .map((row, index) => ({ row, index }))
+      .filter(({ row }) => selectedRowIds.value.has(getRowIdentity(row)));
+  }
+
+  return rows.value.map((row, index) => ({ row, index }));
 }
 
 async function browseExportPath() {
@@ -2162,9 +2572,15 @@ async function confirmExportText() {
 }
 
 function rowsForTextExport() {
-  return exportFilteredOnly.value
-    ? filteredRows.value.map(({ row }) => row)
-    : rows.value;
+  if (exportScope.value === "filtered") {
+    return filteredRows.value.map(({ row }) => row);
+  }
+
+  if (exportScope.value === "selected") {
+    return rows.value.filter((row) => selectedRowIds.value.has(getRowIdentity(row)));
+  }
+
+  return rows.value;
 }
 
 function serializeEncodingTableRows(exportRows: EncodingRow[]) {
@@ -2325,6 +2741,115 @@ function openBulkColumnDialog() {
 
 function closeBulkColumnDialog() {
   isBulkColumnDialogOpen.value = false;
+}
+
+function openCodeShiftDialog() {
+  pruneSelectedRows(true);
+  if (selectedRowIds.value.size === 0) {
+    statusMessage.value = t("message.noRowsSelected");
+    errorMessage.value = "";
+    return;
+  }
+
+  if (!openEncodingDialog("codeShift")) return;
+}
+
+function closeCodeShiftDialog() {
+  isCodeShiftDialogOpen.value = false;
+}
+
+async function confirmCodeShift() {
+  pruneSelectedRows(true);
+  const selectedIds = selectedRowIds.value;
+  if (selectedIds.size === 0) {
+    closeCodeShiftDialog();
+    return;
+  }
+
+  const x = parseCodeShiftInput(codeShiftXValue.value, codeShiftBase.value);
+  const y = parseCodeShiftInput(codeShiftYValue.value, codeShiftBase.value);
+  if (x === null || y === null) {
+    errorMessage.value = t("encoding.codeShiftInvalidInput");
+    statusMessage.value = "";
+    return;
+  }
+
+  const delta = x + 0x100 * y;
+  const signedDelta = codeShiftOperation.value === "add" ? delta : -delta;
+  const confirmed = await confirm(
+    `${t("encoding.codeShiftConfirm")} ${t("bulk.selectedRows")}: ${selectedIds.size}.`,
+    {
+      title: t("encoding.codeShiftTitle"),
+      kind: "warning",
+    },
+  );
+  if (!confirmed) return;
+
+  let changedCount = 0;
+  let skippedCount = 0;
+  rows.value.forEach((row) => {
+    if (!selectedIds.has(getRowIdentity(row))) return;
+
+    const sourceCode = parseCodeValue(row[codeShiftColumn.value]);
+    if (sourceCode === null) {
+      skippedCount += 1;
+      return;
+    }
+
+    const nextCode = sourceCode + signedDelta;
+    if (nextCode < 0) {
+      skippedCount += 1;
+      return;
+    }
+
+    row[codeShiftColumn.value] =
+      codeShiftColumn.value === "code"
+        ? formatCodeValue(nextCode, row[codeShiftColumn.value])
+        : formatHexCellValue(nextCode, row[codeShiftColumn.value]);
+    changedCount += 1;
+  });
+
+  rows.value = [...rows.value];
+  pruneSelectedRows(true);
+  closeCodeShiftDialog();
+  statusMessage.value = `${t("encoding.codeShiftChanged")}: ${changedCount}; ${t("encoding.codeShiftSkipped")}: ${skippedCount}.`;
+  errorMessage.value = "";
+}
+
+function parseCodeShiftInput(value: string, base: CodeShiftBase) {
+  const trimmed = value.trim();
+  if (trimmed === "") return 0;
+
+  if (base === "hex") {
+    const normalized = trimmed.replace(/^0x/i, "");
+    if (!/^[0-9a-f]+$/i.test(normalized)) return null;
+    return Number.parseInt(normalized, 16);
+  }
+
+  if (!/^\d+$/u.test(trimmed)) return null;
+  return Number.parseInt(trimmed, 10);
+}
+
+function parseCodeValue(value: string) {
+  const normalized = value.trim().replace(/^0x/i, "");
+  if (normalized === "" || !/^[0-9a-f]+$/i.test(normalized)) return null;
+  return Number.parseInt(normalized, 16);
+}
+
+function formatCodeValue(value: number, sourceCode: string) {
+  const sourceLength = normalizeCode(sourceCode).length;
+  const minLength = Math.max(2, sourceLength);
+  const hex = value.toString(16).toUpperCase();
+  const paddedLength = Math.max(minLength, hex.length % 2 === 0 ? hex.length : hex.length + 1);
+  return hex.padStart(paddedLength, "0");
+}
+
+function formatHexCellValue(value: number, sourceValue: string) {
+  const source = sourceValue.trim().replace(/^0x/i, "");
+  const minLength = Math.max(2, source.length);
+  const hex = value.toString(16).toUpperCase();
+  const paddedLength = Math.max(minLength, hex.length % 2 === 0 ? hex.length : hex.length + 1);
+  return hex.padStart(paddedLength, "0");
 }
 
 async function confirmBulkColumnChange() {
@@ -2543,6 +3068,151 @@ function goToRow() {
   });
 
   return true;
+}
+
+function openFindReplaceBar() {
+  isFindReplaceOpen.value = true;
+  if (findReplaceColumns.value.length === 0) {
+    findReplaceColumns.value = availableFindReplaceColumns.value.map(
+      (column) => column.key as keyof EncodingRow,
+    );
+  }
+  nextTick(() => {
+    void jumpToFindReplaceMatch(currentFindMatchIndex.value);
+  });
+}
+
+function toggleFindReplaceBar() {
+  if (isFindReplaceOpen.value) {
+    closeFindReplaceBar();
+    return;
+  }
+  openFindReplaceBar();
+}
+
+function closeFindReplaceBar() {
+  isFindReplaceOpen.value = false;
+}
+
+function findReplaceCellMatches(value: string, query: string) {
+  const source = isFindReplaceCaseSensitive.value ? value : value.toLocaleLowerCase();
+  const needle = isFindReplaceCaseSensitive.value ? query : query.toLocaleLowerCase();
+  return findReplaceMatchMode.value === "exact"
+    ? source === needle
+    : source.includes(needle);
+}
+
+function replacementForFindCell(value: string, columnKey: keyof EncodingRow) {
+  const replaced =
+    findReplaceMatchMode.value === "exact"
+      ? findReplaceReplacement.value
+      : value.replace(
+          new RegExp(escapeRegExp(findReplaceQuery.value), isFindReplaceCaseSensitive.value ? "g" : "gi"),
+          findReplaceReplacement.value,
+        );
+
+  return columnKey === "code" ? normalizeCode(replaced) : replaced;
+}
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+async function showPreviousFindReplaceMatch() {
+  if (findReplaceMatches.value.length === 0) return;
+  currentFindMatchIndex.value =
+    (currentFindMatchIndex.value - 1 + findReplaceMatches.value.length) %
+    findReplaceMatches.value.length;
+  await jumpToFindReplaceMatch(currentFindMatchIndex.value);
+}
+
+async function showNextFindReplaceMatch() {
+  if (findReplaceMatches.value.length === 0) return;
+  currentFindMatchIndex.value =
+    (currentFindMatchIndex.value + 1) % findReplaceMatches.value.length;
+  await jumpToFindReplaceMatch(currentFindMatchIndex.value);
+}
+
+async function jumpToFindReplaceMatch(matchIndex: number) {
+  const match = findReplaceMatches.value[matchIndex];
+  if (!match) return;
+
+  const nextScrollTop = sumRowHeights(filteredRows.value, 0, match.filteredIndex);
+  tableScrollTop.value = nextScrollTop;
+  if (tableWrap.value) {
+    tableWrap.value.scrollTop = nextScrollTop;
+  }
+  updateTableViewport();
+  await nextTick();
+  alignRenderedRow(match.row);
+  await nextTick();
+  alignRenderedFindCell(match);
+}
+
+function alignRenderedFindCell(match: EncodingFindReplaceMatch) {
+  const rowElement = rowElements.get(getRowIdentity(match.row));
+  const wrapper = tableWrap.value;
+  if (!rowElement || !wrapper) return;
+
+  const cell = rowElement.querySelector<HTMLElement>(
+    `[data-cell-column="${match.columnKey}"]`,
+  );
+  if (!cell) return;
+
+  const wrapperRect = wrapper.getBoundingClientRect();
+  const cellRect = cell.getBoundingClientRect();
+  if (cellRect.left < wrapperRect.left || cellRect.right > wrapperRect.right) {
+    wrapper.scrollLeft += cellRect.left - wrapperRect.left - 12;
+  }
+}
+
+function isCurrentFindReplaceCell(row: EncodingRow, columnKey: EncodingColumnKey) {
+  const match = currentFindReplaceMatch.value;
+  return (
+    Boolean(match) &&
+    match?.row === row &&
+    match.columnKey === columnKey
+  );
+}
+
+function replaceCurrentFindReplaceMatch() {
+  const match = currentFindReplaceMatch.value;
+  if (!match) return;
+
+  const currentValue = match.row[match.columnKey];
+  const nextValue = replacementForFindCell(currentValue, match.columnKey);
+  if (nextValue === currentValue) return;
+
+  match.row[match.columnKey] = nextValue;
+  statusMessage.value = `${t("find.replacedCells")}: 1.`;
+  errorMessage.value = "";
+}
+
+async function replaceAllFindReplaceMatches() {
+  if (findReplaceMatches.value.length === 0) return;
+
+  const shouldReplace = await confirm(t("find.replaceAllConfirm"), {
+    title: t("find.replaceAllTitle"),
+  });
+  if (!shouldReplace) return;
+
+  const uniqueCells = new Map<string, EncodingFindReplaceMatch>();
+  for (const match of findReplaceMatches.value) {
+    uniqueCells.set(`${getRowIdentity(match.row)}:${match.columnKey}`, match);
+  }
+
+  let changedCount = 0;
+  for (const match of uniqueCells.values()) {
+    const currentValue = match.row[match.columnKey];
+    const nextValue = replacementForFindCell(currentValue, match.columnKey);
+    if (nextValue === currentValue) continue;
+    match.row[match.columnKey] = nextValue;
+    changedCount += 1;
+  }
+
+  currentFindMatchIndex.value = 0;
+  statusMessage.value = `${t("find.replacedCells")}: ${changedCount}.`;
+  errorMessage.value = "";
 }
 
 function rowHeight(row: EncodingRow) {
@@ -2921,6 +3591,17 @@ function persistBulkColumnKey() {
   window.localStorage.setItem(bulkColumnStorageKey, bulkColumnKey.value);
 }
 
+function restoreExportScope(storageKey: string): ExportScope {
+  const storedScope = window.localStorage.getItem(storageKey);
+  return storedScope === "all" || storedScope === "filtered" || storedScope === "selected"
+    ? storedScope
+    : "all";
+}
+
+function persistExportScope(storageKey: string, scope: ExportScope) {
+  window.localStorage.setItem(storageKey, scope);
+}
+
 function restoreThemeMode(): ThemeMode {
   const storedTheme = window.localStorage.getItem(themeStorageKey);
   return storedTheme === "system" || storedTheme === "dark" || storedTheme === "light"
@@ -3208,6 +3889,10 @@ async function syncNativeChrome() {
 
 function refreshDefaultCheckMessages() {
   const defaultMessages = new Set(["Not checked yet.", "尚未检查。"]);
+  const defaultStatsMessages = new Set(["Not counted yet.", "尚未统计。"]);
+  if (defaultStatsMessages.has(characterStatsMessage.value)) {
+    characterStatsMessage.value = t("stats.notCountedYet");
+  }
   if (defaultMessages.has(unmappedMessage.value)) {
     unmappedMessage.value = t("message.notCheckedYet");
   }
@@ -3390,6 +4075,23 @@ function refreshDefaultCheckMessages() {
       </div>
     </div>
 
+    <FindReplaceBar
+      v-if="isFindReplaceOpen"
+      v-model:query="findReplaceQuery"
+      v-model:replacement="findReplaceReplacement"
+      v-model:selected-columns="findReplaceColumns"
+      v-model:match-mode="findReplaceMatchMode"
+      v-model:case-sensitive="isFindReplaceCaseSensitive"
+      :columns="availableFindReplaceColumns"
+      :current-match-index="currentFindMatchIndex"
+      :match-count="findReplaceMatches.length"
+      @close="closeFindReplaceBar"
+      @find-next="showNextFindReplaceMatch"
+      @find-previous="showPreviousFindReplaceMatch"
+      @replace="replaceCurrentFindReplaceMatch"
+      @replace-all="replaceAllFindReplaceMatches"
+    />
+
     <section
       ref="tableWrap"
       class="encoding-table-wrap"
@@ -3425,7 +4127,7 @@ function refreshDefaultCheckMessages() {
                 class="row-action-btn add-row-btn"
                 type="button"
                 aria-label="Add row at end"
-                @click="addRowAtEnd"
+                @click="openInsertRowsDialog('start')"
               >
                 +
               </button>
@@ -3538,6 +4240,8 @@ function refreshDefaultCheckMessages() {
             <div
               v-else
               class="textarea-cell"
+              :class="{ 'find-current-cell': isCurrentFindReplaceCell(row, column.key) }"
+              :data-cell-column="column.key"
               :style="encodingCellStyle(column.key)"
             >
               <textarea
@@ -3558,6 +4262,11 @@ function refreshDefaultCheckMessages() {
           class="virtual-spacer"
           :style="{ height: `${virtualRange.bottomPadding}px` }"
         />
+        <div class="table-footer-actions">
+          <button type="button" class="footer-insert-btn" @click="openInsertRowsDialog('end')">
+            +
+          </button>
+        </div>
       </div>
     </section>
 
@@ -3579,11 +4288,59 @@ function refreshDefaultCheckMessages() {
       @confirm="confirmBulkColumnChange"
     />
 
+    <EncodingCodeShiftDialog
+      v-if="isCodeShiftDialogOpen"
+      v-model:column="codeShiftColumn"
+      v-model:operation="codeShiftOperation"
+      v-model:base="codeShiftBase"
+      v-model:x-value="codeShiftXValue"
+      v-model:y-value="codeShiftYValue"
+      :columns="bulkEditableColumns"
+      :selected-count="selectedRowCount"
+      @close="closeCodeShiftDialog"
+      @confirm="confirmCodeShift"
+    />
+
+    <InsertRowsDialog
+      v-if="isInsertRowsDialogOpen"
+      v-model:target-row="insertRowsTargetRow"
+      v-model:count="insertRowsCount"
+      :max-row="rows.length + 1"
+      @close="closeInsertRowsDialog"
+      @confirm="confirmInsertRows"
+    />
+
     <LanguageDialog
       v-if="isLanguageDialogOpen"
       :current-language="currentLanguage"
       @close="closeLanguageDialog"
       @select="selectLanguage"
+    />
+
+    <CharacterStatsDialog
+      v-if="isCharacterStatsDialogOpen"
+      v-model:scope="characterStatsScope"
+      v-model:text-scope="characterStatsTextScope"
+      v-model:include-all-characters="characterStatsIncludeAll"
+      v-model:character-types="characterStatsTypes"
+      v-model:sort-order="characterStatsSortOrder"
+      v-model:bracket-token-types="characterStatsBracketTokenTypes"
+      v-model:ignore-whitespace="characterStatsIgnoreWhitespace"
+      :title="t('stats.characterCount')"
+      always-show-progress
+      :can-copy="characterStatsResult !== ''"
+      :is-running="isCountingCharacterStats"
+      :message="characterStatsMessage"
+      :progress-value="characterStatsProgress"
+      :result="characterStatsResult"
+      :row-count-label="t('stats.encodingRows')"
+      :row-count="characterStatsRowCount"
+      :text-row-count="characterStatsTextRowCount"
+      show-ignore-whitespace
+      show-text-scope
+      @close="closeCharacterStatsDialog"
+      @copy="copyCharacterStatsResult"
+      @run="runCharacterStats"
     />
 
     <CharacterStatsDialog
@@ -3686,7 +4443,7 @@ function refreshDefaultCheckMessages() {
     <EncodingExportDialog
       v-if="isExportDialogOpen"
       v-model:path="exportPath"
-      v-model:filtered-only="exportFilteredOnly"
+      v-model:scope="exportScope"
       v-model:extension="exportExtension"
       v-model:direction="exportDirection"
       v-model:newline="exportNewline"
@@ -3704,7 +4461,7 @@ function refreshDefaultCheckMessages() {
     <EncodingExcelExportDialog
       v-if="isExcelExportDialogOpen"
       v-model:path="excelExportPath"
-      v-model:filtered-only="excelExportFilteredOnly"
+      v-model:scope="excelExportScope"
       :can-export="canExportExcel"
       :is-error="errorMessage !== ''"
       :is-exporting="isExportingExcel"
@@ -4445,6 +5202,24 @@ button {
   user-select: none;
 }
 
+.table-footer-actions {
+  display: flex;
+  align-items: center;
+  min-height: 34px;
+  padding: 4px 10px;
+  background: var(--panel-bg);
+}
+
+.footer-insert-btn {
+  width: 24px;
+  min-height: 24px;
+  border: 1px solid var(--success);
+  border-radius: 6px;
+  color: var(--on-accent);
+  background: var(--success);
+  font-weight: 700;
+}
+
 .header-row .table-end-spacer {
   background: var(--header-bg);
 }
@@ -4463,6 +5238,12 @@ button {
   position: relative;
   min-height: 42px;
   background: var(--panel-bg);
+}
+
+.textarea-cell.find-current-cell {
+  outline: 2px solid var(--warning);
+  outline-offset: -2px;
+  background: var(--warning-bg);
 }
 
 .row-number-cell {

@@ -34,10 +34,12 @@ const OPEN_LANGUAGE_DIALOG_MENU_ID: &str = "open_language_dialog";
 const LANGUAGE_EN_MENU_ID: &str = "language_en";
 const LANGUAGE_ZH_HANS_MENU_ID: &str = "language_zh_hans";
 const OPEN_SEARCH_PANEL_MENU_ID: &str = "open_search_panel";
+const OPEN_FIND_REPLACE_MENU_ID: &str = "open_find_replace";
 const ENCODING_OPEN_LANGUAGE_DIALOG_MENU_ID: &str = "encoding_open_language_dialog";
 const ENCODING_LANGUAGE_EN_MENU_ID: &str = "encoding_language_en";
 const ENCODING_LANGUAGE_ZH_HANS_MENU_ID: &str = "encoding_language_zh_hans";
 const ENCODING_OPEN_SEARCH_PANEL_MENU_ID: &str = "encoding_open_search_panel";
+const ENCODING_OPEN_FIND_REPLACE_MENU_ID: &str = "encoding_open_find_replace";
 const CHARACTER_STATS_MENU_ID: &str = "character_stats";
 const UNDO_TABLE_CHANGE_MENU_ID: &str = "undo_table_change";
 const REDO_TABLE_CHANGE_MENU_ID: &str = "redo_table_change";
@@ -48,6 +50,8 @@ const SELECT_ALL_FILTERED_MENU_ID: &str = "select_all_filtered";
 const DESELECT_ALL_ROWS_MENU_ID: &str = "deselect_all_rows";
 const BULK_CHANGE_STATE_MENU_ID: &str = "bulk_change_state";
 const BULK_CHANGE_COLUMN_MENU_ID: &str = "bulk_change_column";
+const CODE_SHIFT_MENU_ID: &str = "code_shift";
+const INSERT_ROWS_MENU_ID: &str = "insert_rows";
 const ENCODING_IMPORT_MENU_ID: &str = "encoding_import";
 const ENCODING_READ_JSON_MENU_ID: &str = "encoding_read_json";
 const ENCODING_SAVE_JSON_MENU_ID: &str = "encoding_save_json";
@@ -55,6 +59,7 @@ const ENCODING_SAVE_JSON_AS_MENU_ID: &str = "encoding_save_json_as";
 const ENCODING_EXPORT_MENU_ID: &str = "encoding_export";
 const ENCODING_IMPORT_EXCEL_MENU_ID: &str = "encoding_import_excel";
 const ENCODING_EXPORT_EXCEL_MENU_ID: &str = "encoding_export_excel";
+const ENCODING_CHARACTER_STATS_MENU_ID: &str = "encoding_character_stats";
 const ENCODING_UNMAPPED_CHARACTERS_MENU_ID: &str = "encoding_unmapped_characters";
 const ENCODING_UNUSED_ENCODINGS_MENU_ID: &str = "encoding_unused_encodings";
 const ENCODING_LINE_LENGTH_MENU_ID: &str = "encoding_line_length";
@@ -65,6 +70,8 @@ const ENCODING_COPY_SELECTED_MENU_ID: &str = "encoding_copy_selected";
 const ENCODING_SELECT_ALL_FILTERED_MENU_ID: &str = "encoding_select_all_filtered";
 const ENCODING_DESELECT_ALL_ROWS_MENU_ID: &str = "encoding_deselect_all_rows";
 const ENCODING_BULK_CHANGE_COLUMN_MENU_ID: &str = "encoding_bulk_change_column";
+const ENCODING_CODE_SHIFT_MENU_ID: &str = "encoding_code_shift";
+const ENCODING_INSERT_ROWS_MENU_ID: &str = "encoding_insert_rows";
 const ENCODING_TOGGLE_TOP_PANEL_MENU_ID: &str = "encoding_toggle_top_panel";
 const LLM_API_KEY_SERVICE: &str = "txtmgr.llm";
 const LLM_API_KEY_ACCOUNT: &str = "default_api_key";
@@ -838,12 +845,22 @@ fn menu_label(language: &str, key: &str) -> &'static str {
                 "Find..."
             }
         }
+        "find_replace" => {
+            if zh {
+                "查找与替换..."
+            } else {
+                "Find and Replace..."
+            }
+        }
         "tools" => {
             if zh {
                 "工具"
             } else {
                 "Tools"
             }
+        }
+        "hex" => {
+            "Hex"
         }
         "statistics" => {
             if zh {
@@ -990,6 +1007,20 @@ fn menu_label(language: &str, key: &str) -> &'static str {
                 "批量修改选中列内容..."
             } else {
                 "Change Selected Column..."
+            }
+        }
+        "insert_rows" => {
+            if zh {
+                "插入行..."
+            } else {
+                "Insert Rows..."
+            }
+        }
+        "code_shift" => {
+            if zh {
+                "批量增减选中列数值..."
+            } else {
+                "Shift Selected Column..."
             }
         }
         "character_count" => {
@@ -1166,11 +1197,32 @@ fn build_encoding_menu_for<R: Runtime>(
     .accelerator(shortcut_accelerator(ENCODING_BULK_CHANGE_COLUMN_MENU_ID))
     .build(app)?;
 
+    let insert_rows = MenuItemBuilder::with_id(
+        ENCODING_INSERT_ROWS_MENU_ID,
+        menu_label(language, "insert_rows"),
+    )
+    .accelerator(shortcut_accelerator(ENCODING_INSERT_ROWS_MENU_ID))
+    .build(app)?;
+
+    let code_shift = MenuItemBuilder::with_id(
+        ENCODING_CODE_SHIFT_MENU_ID,
+        menu_label(language, "code_shift"),
+    )
+    .accelerator(shortcut_accelerator(ENCODING_CODE_SHIFT_MENU_ID))
+    .build(app)?;
+
     let unmapped_characters = MenuItemBuilder::with_id(
         ENCODING_UNMAPPED_CHARACTERS_MENU_ID,
         menu_label(language, "unmapped"),
     )
     .accelerator(shortcut_accelerator(ENCODING_UNMAPPED_CHARACTERS_MENU_ID))
+    .build(app)?;
+
+    let character_stats = MenuItemBuilder::with_id(
+        ENCODING_CHARACTER_STATS_MENU_ID,
+        menu_label(language, "character_count"),
+    )
+    .accelerator(shortcut_accelerator(ENCODING_CHARACTER_STATS_MENU_ID))
     .build(app)?;
 
     let unused_encodings = MenuItemBuilder::with_id(
@@ -1208,6 +1260,13 @@ fn build_encoding_menu_for<R: Runtime>(
     .accelerator(shortcut_accelerator(ENCODING_OPEN_SEARCH_PANEL_MENU_ID))
     .build(app)?;
 
+    let find_replace = MenuItemBuilder::with_id(
+        ENCODING_OPEN_FIND_REPLACE_MENU_ID,
+        menu_label(language, "find_replace"),
+    )
+    .accelerator(shortcut_accelerator(ENCODING_OPEN_FIND_REPLACE_MENU_ID))
+    .build(app)?;
+
     let tools_separator_1 = PredefinedMenuItem::separator(app)?;
     let tools_separator_2 = PredefinedMenuItem::separator(app)?;
     let tools_separator_3 = PredefinedMenuItem::separator(app)?;
@@ -1228,11 +1287,13 @@ fn build_encoding_menu_for<R: Runtime>(
 
     let tools_menu = SubmenuBuilder::new(app, menu_label(language, "tools"))
         .item(&find)
+        .item(&find_replace)
         .item(&go_to_row)
         .item(&tools_separator_1)
         .item(&select_all_filtered)
         .item(&deselect_all)
         .item(&copy_selected)
+        .item(&insert_rows)
         .item(&bulk_change_column)
         .item(&tools_separator_2)
         .item(&clear_list)
@@ -1241,11 +1302,16 @@ fn build_encoding_menu_for<R: Runtime>(
         .item(&language_dialog)
         .build()?;
 
+    let hex_menu = SubmenuBuilder::new(app, menu_label(language, "hex"))
+        .item(&code_shift)
+        .build()?;
+
     let view_menu = SubmenuBuilder::new(app, menu_label(language, "view"))
         .item(&toggle_top_panel)
         .build()?;
 
     let statistics_menu = SubmenuBuilder::new(app, menu_label(language, "statistics"))
+        .item(&character_stats)
         .item(&unmapped_characters)
         .item(&unused_encodings)
         .item(&line_length)
@@ -1255,6 +1321,7 @@ fn build_encoding_menu_for<R: Runtime>(
     menu.append(&file_menu)?;
     menu.append(&view_menu)?;
     menu.append(&tools_menu)?;
+    menu.append(&hex_menu)?;
     menu.append(&statistics_menu)?;
     Ok(menu)
 }
@@ -1374,6 +1441,16 @@ fn build_main_menu_for_with_columns<R: Runtime>(
     .accelerator(shortcut_accelerator(BULK_CHANGE_COLUMN_MENU_ID))
     .build(app)?;
 
+    let insert_rows =
+        MenuItemBuilder::with_id(INSERT_ROWS_MENU_ID, menu_label(language, "insert_rows"))
+            .accelerator(shortcut_accelerator(INSERT_ROWS_MENU_ID))
+            .build(app)?;
+
+    let code_shift =
+        MenuItemBuilder::with_id(CODE_SHIFT_MENU_ID, menu_label(language, "code_shift"))
+            .accelerator(shortcut_accelerator(CODE_SHIFT_MENU_ID))
+            .build(app)?;
+
     let character_stats = MenuItemBuilder::with_id(
         CHARACTER_STATS_MENU_ID,
         menu_label(language, "character_count"),
@@ -1399,6 +1476,13 @@ fn build_main_menu_for_with_columns<R: Runtime>(
         .accelerator(shortcut_accelerator(OPEN_SEARCH_PANEL_MENU_ID))
         .build(app)?;
 
+    let find_replace = MenuItemBuilder::with_id(
+        OPEN_FIND_REPLACE_MENU_ID,
+        menu_label(language, "find_replace"),
+    )
+    .accelerator(shortcut_accelerator(OPEN_FIND_REPLACE_MENU_ID))
+    .build(app)?;
+
     let tools_separator_1 = PredefinedMenuItem::separator(app)?;
     let tools_separator_2 = PredefinedMenuItem::separator(app)?;
     let tools_separator_3 = PredefinedMenuItem::separator(app)?;
@@ -1418,11 +1502,13 @@ fn build_main_menu_for_with_columns<R: Runtime>(
 
     let tools_menu = SubmenuBuilder::new(app, menu_label(language, "tools"))
         .item(&find)
+        .item(&find_replace)
         .item(&go_to_row)
         .item(&tools_separator_1)
         .item(&select_all_filtered)
         .item(&deselect_all)
         .item(&copy_selected)
+        .item(&insert_rows)
         .item(&bulk_change_state)
         .item(&bulk_change_column)
         .item(&tools_separator_2)
@@ -1434,6 +1520,10 @@ fn build_main_menu_for_with_columns<R: Runtime>(
         .item(&ai_translation)
         .item(&tools_separator_4)
         .item(&language_dialog)
+        .build()?;
+
+    let hex_menu = SubmenuBuilder::new(app, menu_label(language, "hex"))
+        .item(&code_shift)
         .build()?;
 
     let statistics_menu = SubmenuBuilder::new(app, menu_label(language, "statistics"))
@@ -1464,6 +1554,7 @@ fn build_main_menu_for_with_columns<R: Runtime>(
     menu.append(&file_menu)?;
     menu.append(&view_menu)?;
     menu.append(&tools_menu)?;
+    menu.append(&hex_menu)?;
     menu.append(&statistics_menu)?;
     Ok(menu)
 }
@@ -1580,6 +1671,9 @@ fn emit_encoding_menu_event<R: Runtime>(app: &AppHandle<R>, menu_id: &str) {
         ENCODING_OPEN_SEARCH_PANEL_MENU_ID => {
             let _ = app.emit_to("encoding", "encoding-open-search-panel", ());
         }
+        ENCODING_OPEN_FIND_REPLACE_MENU_ID => {
+            let _ = app.emit_to("encoding", "encoding-open-find-replace", ());
+        }
         ENCODING_TOGGLE_TOP_PANEL_MENU_ID => {
             let _ = app.emit_to("encoding", "encoding-toggle-top-panel", ());
         }
@@ -1600,6 +1694,15 @@ fn emit_encoding_menu_event<R: Runtime>(app: &AppHandle<R>, menu_id: &str) {
         }
         ENCODING_BULK_CHANGE_COLUMN_MENU_ID => {
             let _ = app.emit_to("encoding", "encoding-bulk-change-column", ());
+        }
+        ENCODING_INSERT_ROWS_MENU_ID => {
+            let _ = app.emit_to("encoding", "encoding-insert-rows", ());
+        }
+        ENCODING_CODE_SHIFT_MENU_ID => {
+            let _ = app.emit_to("encoding", "encoding-code-shift", ());
+        }
+        ENCODING_CHARACTER_STATS_MENU_ID => {
+            let _ = app.emit_to("encoding", "encoding-open-character-stats", ());
         }
         ENCODING_UNMAPPED_CHARACTERS_MENU_ID => {
             let _ = app.emit_to("encoding", "encoding-open-unmapped-characters", ());
@@ -1646,6 +1749,9 @@ fn emit_main_menu_event<R: Runtime>(app: &AppHandle<R>, menu_id: &str) {
         }
         OPEN_SEARCH_PANEL_MENU_ID => {
             let _ = app.emit_to("main", "open-search-panel", ());
+        }
+        OPEN_FIND_REPLACE_MENU_ID => {
+            let _ = app.emit_to("main", "open-find-replace", ());
         }
         OPEN_ENCODING_MANAGER_MENU_ID => {
             let _ = app.emit_to("main", "open-encoding-manager", ());
@@ -1723,6 +1829,12 @@ fn emit_main_menu_event<R: Runtime>(app: &AppHandle<R>, menu_id: &str) {
         }
         BULK_CHANGE_COLUMN_MENU_ID => {
             let _ = app.emit_to("main", "bulk-change-column", ());
+        }
+        INSERT_ROWS_MENU_ID => {
+            let _ = app.emit_to("main", "insert-rows", ());
+        }
+        CODE_SHIFT_MENU_ID => {
+            let _ = app.emit_to("main", "code-shift", ());
         }
         CHARACTER_STATS_MENU_ID => {
             let _ = app.emit_to("main", "open-character-stats", ());
@@ -1838,6 +1950,7 @@ pub fn run() {
                             | ENCODING_EXPORT_EXCEL_MENU_ID
                             | ENCODING_GO_TO_ROW_MENU_ID
                             | ENCODING_OPEN_SEARCH_PANEL_MENU_ID
+                            | ENCODING_OPEN_FIND_REPLACE_MENU_ID
                             | ENCODING_TOGGLE_TOP_PANEL_MENU_ID
                             | ENCODING_CLEAR_LIST_MENU_ID
                             | ENCODING_DELETE_SELECTED_MENU_ID
@@ -1845,6 +1958,9 @@ pub fn run() {
                             | ENCODING_SELECT_ALL_FILTERED_MENU_ID
                             | ENCODING_DESELECT_ALL_ROWS_MENU_ID
                             | ENCODING_BULK_CHANGE_COLUMN_MENU_ID
+                            | ENCODING_CODE_SHIFT_MENU_ID
+                            | ENCODING_INSERT_ROWS_MENU_ID
+                            | ENCODING_CHARACTER_STATS_MENU_ID
                             | ENCODING_UNMAPPED_CHARACTERS_MENU_ID
                             | ENCODING_UNUSED_ENCODINGS_MENU_ID
                             | ENCODING_LINE_LENGTH_MENU_ID

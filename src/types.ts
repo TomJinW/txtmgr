@@ -61,6 +61,7 @@ export type ThemeMode = "system" | "light" | "dark";
 export type TextMatchMode = "contains" | "exact";
 export type CjkFallbackMode = "default" | "sc" | "tc" | "jp" | "kr";
 export type CjkFallbackColumn = "original" | "translated" | "note";
+export type ExportScope = "all" | "filtered" | "selected";
 export type ExcelColumnKey = "row_number" | keyof SentenceRow;
 export type FileNameImportMode = "none" | "column" | "sheet";
 
