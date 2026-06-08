@@ -3025,6 +3025,9 @@ Rules:
 - Do not add explanations or invent story details.
 - If the existing translation is usable, improve it instead of rewriting unnecessarily.
 - Follow the user note if provided.
+- Use the nearby context to keep terminology, tone, speaker continuity, and UI wording consistent.
+- In nearby context, if translation is identical to original, treat it as untranslated unless it is clearly a proper noun, code, symbol, or intentionally preserved term.
+- Do not translate or rewrite nearby context rows; only translate the current row.
 
 Current row:
 file_name: {file_name}
@@ -3038,7 +3041,7 @@ Original text:
 Existing translation:
 {translated_text}
 
-Nearby context, for reference only:
+Nearby context, for consistency reference only:
 {nearby_rows}
 
 Reference txt attachment, for terminology and style only. Do not translate this whole attachment:
@@ -3065,6 +3068,9 @@ Rules:
 - Preserve names, terminology, bracketed tokens, and placeholders exactly when they should not be translated.
 - If the existing translation is usable, improve it instead of rewriting unnecessarily.
 - Follow the user note if provided.
+- Use nearby subtitle context to keep pronouns, terminology, speaker continuity, and emotional tone consistent.
+- In nearby context, if translation is identical to original, treat it as untranslated unless it is clearly a proper noun, code, symbol, or intentionally preserved term.
+- Do not translate or rewrite nearby subtitle context; only translate the current subtitle.
 
 Current subtitle:
 timecode/title_addr: {title_addr}
@@ -3078,7 +3084,7 @@ Original subtitle:
 Existing translation:
 {translated_text}
 
-Nearby subtitle context, for reference only:
+Nearby subtitle context, for consistency reference only:
 {nearby_rows}
 
 Reference txt attachment, for terminology, names, and style only. Do not translate this whole attachment:
