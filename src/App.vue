@@ -4417,14 +4417,7 @@ async function goToRow() {
   errorMessage.value = "";
   statusMessage.value = `${t("message.jumpedToRow")} ${targetRowNumber}.`;
 
-  const nextScrollTop = sumRowHeights(filteredRows.value, 0, filteredIndex);
-  tableScrollTop.value = nextScrollTop;
-  if (tableWrap.value) {
-    tableWrap.value.scrollTop = nextScrollTop;
-  }
-  updateTableViewport();
-  await nextTick();
-  alignRenderedRow(filteredRows.value[filteredIndex].row);
+  await scrollToFilteredRowWithMeasurement(filteredIndex);
   return true;
 }
 
@@ -4453,18 +4446,34 @@ async function jumpToSelectedRow(direction: "previous" | "next") {
   const target = filteredRows.value[targetFilteredIndex];
   if (!target) return false;
 
-  const nextScrollTop = sumRowHeights(filteredRows.value, 0, targetFilteredIndex);
-  tableScrollTop.value = nextScrollTop;
-  if (tableWrap.value) {
-    tableWrap.value.scrollTop = nextScrollTop;
-  }
-  updateTableViewport();
-  await nextTick();
-  alignRenderedRow(target.row);
+  await scrollToFilteredRowWithMeasurement(targetFilteredIndex);
 
   errorMessage.value = "";
   statusMessage.value = `${t("message.jumpedToRow")} ${target.index + 1}.`;
   return true;
+}
+
+async function scrollToFilteredRowWithMeasurement(filteredIndex: number) {
+  const target = filteredRows.value[filteredIndex];
+  if (!target) return;
+
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const nextScrollTop = sumRowHeights(filteredRows.value, 0, filteredIndex);
+    tableScrollTop.value = nextScrollTop;
+    if (tableWrap.value) {
+      tableWrap.value.scrollTop = nextScrollTop;
+    }
+    updateTableViewport();
+    await nextTick();
+    await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
+
+    if (rowElements.has(getRowIdentity(target.row))) {
+      alignRenderedRow(target.row);
+      return;
+    }
+  }
+
+  alignRenderedRow(target.row);
 }
 
 function currentFilteredIndexFromScrollTop() {
@@ -7324,6 +7333,7 @@ button {
   display: flex;
   flex-direction: column;
   overflow: auto;
+  overflow-anchor: none;
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--panel-bg);
@@ -7336,6 +7346,7 @@ button {
 .sentence-grid {
   display: grid;
   min-width: max-content;
+  overflow-anchor: none;
 }
 
 .header-row {
@@ -7506,6 +7517,7 @@ button {
 
 .virtual-spacer {
   min-width: 1px;
+  overflow-anchor: none;
   pointer-events: none;
 }
 
