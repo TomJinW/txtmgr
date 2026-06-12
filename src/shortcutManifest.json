@@ -1,5 +1,7 @@
 {
   "go_to_row": { "mac": "Cmd+G", "other": "Ctrl+G" },
+  "previous_selected_row": { "mac": "Cmd+Shift+,", "other": "Ctrl+Shift+," },
+  "next_selected_row": { "mac": "Cmd+Shift+.", "other": "Ctrl+Shift+." },
   "open_encoding_manager": { "mac": "Cmd+Shift+E", "other": "Ctrl+Shift+E" },
   "llm_server_settings": { "mac": "Cmd+,", "other": "Ctrl+," },
   "ai_translation": { "mac": "Cmd+Option+A", "other": "Ctrl+Alt+A" },
@@ -38,6 +40,8 @@
   "encoding_unused_encodings": { "mac": "Cmd+Option+N", "other": "Ctrl+Alt+N" },
   "encoding_line_length": { "mac": "Cmd+Option+L", "other": "Ctrl+Alt+L" },
   "encoding_go_to_row": { "mac": "Cmd+G", "other": "Ctrl+G" },
+  "encoding_previous_selected_row": { "mac": "Cmd+Shift+,", "other": "Ctrl+Shift+," },
+  "encoding_next_selected_row": { "mac": "Cmd+Shift+.", "other": "Ctrl+Shift+." },
   "encoding_clear_list": { "mac": "Cmd+Shift+Backspace", "other": "Ctrl+Shift+Delete" },
   "encoding_delete_selected": { "mac": "Cmd+Backspace", "other": "Ctrl+Delete" },
   "encoding_copy_selected": { "mac": "Cmd+Shift+C", "other": "Ctrl+Shift+C" },

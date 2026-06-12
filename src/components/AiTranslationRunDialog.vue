@@ -9,16 +9,24 @@ const props = defineProps<{
   errorCount: number;
   isStopping: boolean;
   message: string;
+  preventSleepEnabled: boolean;
+  preventSleepSupported: boolean;
   totalCount: number;
 }>();
 
 const emit = defineEmits<{
   stop: [];
+  updatePreventSleep: [enabled: boolean];
 }>();
 
 const pendingCount = computed(() =>
   Math.max(0, props.totalCount - props.completedCount),
 );
+
+function handlePreventSleepChange(event: Event) {
+  if (!props.preventSleepSupported) return;
+  emit("updatePreventSleep", (event.target as HTMLInputElement).checked);
+}
 </script>
 
 <template>
@@ -75,6 +83,18 @@ const pendingCount = computed(() =>
       </section>
 
       <div class="dialog-actions">
+        <label
+          class="sleep-prevention-toggle"
+          :class="{ disabled: !preventSleepSupported }"
+        >
+          <input
+            type="checkbox"
+            :checked="preventSleepEnabled"
+            :disabled="!preventSleepSupported"
+            @change="handlePreventSleepChange"
+          />
+          <span>{{ preventSleepSupported ? t("ai.preventSleep") : t("ai.preventSleepUnsupported") }}</span>
+        </label>
         <button type="button" :disabled="isStopping" @click="emit('stop')">
           {{ isStopping ? t("common.stopping") : t("common.stop") }}
         </button>
@@ -194,8 +214,27 @@ const pendingCount = computed(() =>
 
 .dialog-actions {
   display: flex;
+  align-items: center;
   justify-content: flex-end;
+  gap: 12px;
   margin-top: 14px;
+}
+
+.sleep-prevention-toggle {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  margin-right: auto;
+  color: var(--text-soft);
+  font-size: 12px;
+}
+
+.sleep-prevention-toggle input {
+  accent-color: var(--primary);
+}
+
+.sleep-prevention-toggle.disabled {
+  opacity: 0.68;
 }
 
 .dialog-actions button {

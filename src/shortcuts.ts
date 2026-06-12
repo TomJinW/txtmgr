@@ -10,6 +10,8 @@ function normalizedKey(value: string) {
   if (key === "esc") return "escape";
   if (key === "option") return "alt";
   if (key === "cmd") return "meta";
+  if (key === "<") return ",";
+  if (key === ">") return ".";
   return key;
 }
 

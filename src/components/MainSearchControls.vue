@@ -46,6 +46,9 @@ const searchLengthMax = defineModel<string>("searchLengthMax", { required: true 
 const selectedSearchColumns = defineModel<TextSearchKey[]>("selectedSearchColumns", {
   required: true,
 });
+const statFilterJoinMode = defineModel<"or" | "and">("statFilterJoinMode", {
+  required: true,
+});
 const rowFilterStart = defineModel<string>("rowFilterStart", { required: true });
 const rowFilterEnd = defineModel<string>("rowFilterEnd", { required: true });
 const goToRowValue = defineModel<string>("goToRowValue", { required: true });
@@ -129,7 +132,7 @@ defineExpose({ focusSearchInput });
     </div>
 
     <div class="stats-panel" aria-label="Status filters">
-      <span class="filter-group-label">{{ t("main.statusFilters") }}</span>
+      <span class="filter-group-label">{{ t("main.statusFilters") }} {{ filteredRowsLength }}</span>
       <div class="stats-list">
         <button
           type="button"
@@ -147,6 +150,13 @@ defineExpose({ focusSearchInput });
         >
           {{ state }} {{ rowStats.stateCounts[state] }}
         </button>
+        <label class="stat-join-control" :title="t('main.statFilterJoinHint')">
+          <span>{{ t("main.statFilterJoin") }}</span>
+          <select v-model="statFilterJoinMode" aria-label="Stat filter relation">
+            <option value="or">{{ t("main.filterOr") }}</option>
+            <option value="and">{{ t("main.filterAnd") }}</option>
+          </select>
+        </label>
         <button
           type="button"
           :class="{ active: isStatFilterActive({ type: 'empty_translation' }) }"

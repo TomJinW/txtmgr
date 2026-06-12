@@ -92,6 +92,10 @@ type TranslationKey =
   | "main.max"
   | "main.to"
   | "main.statusFilters"
+  | "main.statFilterJoin"
+  | "main.statFilterJoinHint"
+  | "main.filterAnd"
+  | "main.filterOr"
   | "main.rows"
   | "main.goToRow"
   | "main.go"
@@ -272,6 +276,7 @@ type TranslationKey =
   | "ai.targetLanguage"
   | "ai.minimumOriginalCharacters"
   | "ai.promptTemplate"
+  | "ai.availableColumns"
   | "ai.defaultGamePrompt"
   | "ai.defaultVideoPrompt"
   | "ai.timeoutSeconds"
@@ -282,6 +287,9 @@ type TranslationKey =
   | "ai.fakeTranslate"
   | "ai.translate"
   | "ai.translating"
+  | "ai.preventSleep"
+  | "ai.preventSleepUnsupported"
+  | "ai.failedSleepPrevention"
   | "ai.translationResult"
   | "ai.runningTranslation"
   | "ai.total"
@@ -542,6 +550,10 @@ const translations: Record<AppLanguage, Record<TranslationKey, string>> = {
     "main.max": "Max",
     "main.to": "to",
     "main.statusFilters": "Status Filters",
+    "main.statFilterJoin": "Relation",
+    "main.statFilterJoinHint": "Switch how status filters combine with the filters after this button.",
+    "main.filterAnd": "AND",
+    "main.filterOr": "OR",
     "main.rows": "Rows",
     "main.goToRow": "Go to row",
     "main.go": "Go",
@@ -722,6 +734,7 @@ const translations: Record<AppLanguage, Record<TranslationKey, string>> = {
     "ai.targetLanguage": "Target language",
     "ai.minimumOriginalCharacters": "Minimum original characters",
     "ai.promptTemplate": "Prompt template",
+    "ai.availableColumns": "Available column placeholders",
     "ai.defaultGamePrompt": "Prompt for Game Translation",
     "ai.defaultVideoPrompt": "Prompt for Subtitle Translation",
     "ai.timeoutSeconds": "Timeout seconds",
@@ -732,6 +745,9 @@ const translations: Record<AppLanguage, Record<TranslationKey, string>> = {
     "ai.fakeTranslate": "Debug Translation",
     "ai.translate": "Translate",
     "ai.translating": "Translating...",
+    "ai.preventSleep": "Prevent sleep while translating",
+    "ai.preventSleepUnsupported": "Sleep prevention is not supported on this system",
+    "ai.failedSleepPrevention": "Failed to update sleep prevention.",
     "ai.translationResult": "Translation Result",
     "ai.runningTranslation": "Running translation...",
     "ai.total": "Total",
@@ -991,6 +1007,10 @@ const translations: Record<AppLanguage, Record<TranslationKey, string>> = {
     "main.max": "最大",
     "main.to": "到",
     "main.statusFilters": "状态过滤",
+    "main.statFilterJoin": "关系",
+    "main.statFilterJoinHint": "切换状态按钮与后方过滤按钮之间的组合关系。",
+    "main.filterAnd": "AND",
+    "main.filterOr": "OR",
     "main.rows": "行",
     "main.goToRow": "跳转到行",
     "main.go": "跳转",
@@ -1171,6 +1191,7 @@ const translations: Record<AppLanguage, Record<TranslationKey, string>> = {
     "ai.targetLanguage": "目标语言",
     "ai.minimumOriginalCharacters": "原文最少字符数",
     "ai.promptTemplate": "提示词模板",
+    "ai.availableColumns": "可用列占位符",
     "ai.defaultGamePrompt": "默认游戏翻译提示词",
     "ai.defaultVideoPrompt": "默认视频字幕翻译提示词",
     "ai.timeoutSeconds": "超时时间秒数",
@@ -1181,6 +1202,9 @@ const translations: Record<AppLanguage, Record<TranslationKey, string>> = {
     "ai.fakeTranslate": "Debug 翻译",
     "ai.translate": "翻译",
     "ai.translating": "翻译中...",
+    "ai.preventSleep": "翻译时阻止休眠",
+    "ai.preventSleepUnsupported": "当前系统暂不支持阻止休眠",
+    "ai.failedSleepPrevention": "更新阻止休眠状态失败。",
     "ai.translationResult": "翻译结果",
     "ai.runningTranslation": "正在翻译...",
     "ai.total": "总数",

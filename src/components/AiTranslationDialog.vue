@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted } from "vue";
+import { computed, onBeforeUnmount, onMounted } from "vue";
 import { t } from "../i18n";
 
 export type AiTranslationScope = "all" | "selected" | "filtered";
@@ -16,6 +16,7 @@ export type AiTranslationSettings = {
 };
 
 const props = defineProps<{
+  availablePromptColumns: string[];
   hasResult: boolean;
   isError: boolean;
   isFakeMode: boolean;
@@ -35,6 +36,10 @@ const emit = defineEmits<{
   translate: [];
   update: [settings: AiTranslationSettings];
 }>();
+
+const availablePromptColumnText = computed(() =>
+  props.availablePromptColumns.map((column) => `{${column}}`).join(", "),
+);
 
 onMounted(() => {
   window.addEventListener("keydown", handleDialogKeydown);
@@ -154,6 +159,10 @@ function handleDialogKeydown(event: KeyboardEvent) {
           spellcheck="false"
           @input="updateField('promptTemplate', ($event.target as HTMLTextAreaElement).value)"
         />
+        <p class="prompt-column-hint">
+          {{ t("ai.availableColumns") }}:
+          {{ availablePromptColumnText }}
+        </p>
       </section>
 
       <section class="settings-section compact-section" aria-label="Request settings">
@@ -360,6 +369,14 @@ function handleDialogKeydown(event: KeyboardEvent) {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   line-height: 1.35;
   resize: vertical;
+}
+
+.prompt-column-hint {
+  margin: 0;
+  color: var(--text-soft);
+  font-size: 12px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
 }
 
 .compact-section {

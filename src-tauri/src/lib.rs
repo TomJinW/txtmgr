@@ -1,4 +1,69 @@
+#[cfg(target_os = "macos")]
+use std::process::Child;
+#[cfg(target_os = "macos")]
+use std::process::{Command, Stdio};
 use std::{collections::HashMap, fs, path::PathBuf, sync::Mutex, time::Duration};
+
+#[cfg(target_os = "windows")]
+use std::ffi::c_void;
+
+#[cfg(target_os = "windows")]
+type WindowsHandle = *mut c_void;
+
+#[cfg(target_os = "windows")]
+#[repr(C)]
+union ReasonContextText {
+    simple_reason_string: *mut u16,
+}
+
+#[cfg(target_os = "windows")]
+#[repr(C)]
+struct ReasonContext {
+    version: u32,
+    flags: u32,
+    reason: ReasonContextText,
+}
+
+#[cfg(target_os = "windows")]
+struct WindowsSleepPreventionHandle(WindowsHandle);
+
+#[cfg(target_os = "windows")]
+unsafe impl Send for WindowsSleepPreventionHandle {}
+#[cfg(target_os = "windows")]
+unsafe impl Sync for WindowsSleepPreventionHandle {}
+
+#[cfg(target_os = "windows")]
+impl Drop for WindowsSleepPreventionHandle {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = PowerClearRequest(self.0, POWER_REQUEST_SYSTEM_REQUIRED);
+            let _ = CloseHandle(self.0);
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+#[link(name = "PowrProf")]
+unsafe extern "system" {
+    fn PowerCreateRequest(context: *mut ReasonContext) -> WindowsHandle;
+    fn PowerSetRequest(power_request: WindowsHandle, request_type: u32) -> i32;
+    fn PowerClearRequest(power_request: WindowsHandle, request_type: u32) -> i32;
+}
+
+#[cfg(target_os = "windows")]
+#[link(name = "kernel32")]
+unsafe extern "system" {
+    fn CloseHandle(object: WindowsHandle) -> i32;
+}
+
+#[cfg(target_os = "windows")]
+const POWER_REQUEST_CONTEXT_VERSION: u32 = 0;
+#[cfg(target_os = "windows")]
+const POWER_REQUEST_CONTEXT_SIMPLE_STRING: u32 = 0x1;
+#[cfg(target_os = "windows")]
+const POWER_REQUEST_SYSTEM_REQUIRED: u32 = 0;
+#[cfg(target_os = "windows")]
+const INVALID_HANDLE_VALUE: isize = -1;
 
 use keyring::Entry;
 use serde::{Deserialize, Serialize};
@@ -12,6 +77,8 @@ use tauri::{
 };
 
 const GO_TO_ROW_MENU_ID: &str = "go_to_row";
+const PREVIOUS_SELECTED_ROW_MENU_ID: &str = "previous_selected_row";
+const NEXT_SELECTED_ROW_MENU_ID: &str = "next_selected_row";
 const OPEN_ENCODING_MANAGER_MENU_ID: &str = "open_encoding_manager";
 const LLM_SERVER_SETTINGS_MENU_ID: &str = "llm_server_settings";
 const AI_TRANSLATION_MENU_ID: &str = "ai_translation";
@@ -65,6 +132,8 @@ const ENCODING_UNMAPPED_CHARACTERS_MENU_ID: &str = "encoding_unmapped_characters
 const ENCODING_UNUSED_ENCODINGS_MENU_ID: &str = "encoding_unused_encodings";
 const ENCODING_LINE_LENGTH_MENU_ID: &str = "encoding_line_length";
 const ENCODING_GO_TO_ROW_MENU_ID: &str = "encoding_go_to_row";
+const ENCODING_PREVIOUS_SELECTED_ROW_MENU_ID: &str = "encoding_previous_selected_row";
+const ENCODING_NEXT_SELECTED_ROW_MENU_ID: &str = "encoding_next_selected_row";
 const ENCODING_UNDO_TABLE_CHANGE_MENU_ID: &str = "encoding_undo_table_change";
 const ENCODING_REDO_TABLE_CHANGE_MENU_ID: &str = "encoding_redo_table_change";
 const ENCODING_CLEAR_LIST_MENU_ID: &str = "encoding_clear_list";
@@ -146,6 +215,12 @@ struct SentenceCoverageSource {
 }
 
 type SentenceCoverageStore = Mutex<SentenceCoverageSource>;
+#[cfg(target_os = "macos")]
+type SleepPreventionStore = Mutex<Option<Child>>;
+#[cfg(target_os = "windows")]
+type SleepPreventionStore = Mutex<Option<WindowsSleepPreventionHandle>>;
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+type SleepPreventionStore = Mutex<()>;
 
 #[derive(Default)]
 #[allow(dead_code)]
@@ -232,6 +307,106 @@ fn get_sentence_coverage_source(
         .lock()
         .map(|source| source.clone())
         .map_err(|_| "Failed to lock sentence coverage source.".to_string())
+}
+
+#[cfg(target_os = "macos")]
+fn stop_sleep_prevention_process(child: &mut Child) -> Result<(), String> {
+    match child.kill() {
+        Ok(()) => {
+            let _ = child.wait();
+            Ok(())
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::InvalidInput => Ok(()),
+        Err(error) => Err(format!("Failed to stop sleep prevention: {error}")),
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn create_windows_sleep_prevention_request() -> Result<WindowsSleepPreventionHandle, String> {
+    let mut reason_text: Vec<u16> = "txtmgr AI translation"
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+    let mut context = ReasonContext {
+        version: POWER_REQUEST_CONTEXT_VERSION,
+        flags: POWER_REQUEST_CONTEXT_SIMPLE_STRING,
+        reason: ReasonContextText {
+            simple_reason_string: reason_text.as_mut_ptr(),
+        },
+    };
+
+    let handle = unsafe { PowerCreateRequest(&mut context) };
+    if handle.is_null() || handle as isize == INVALID_HANDLE_VALUE {
+        return Err("Failed to create Windows sleep prevention request.".to_string());
+    }
+
+    let request = WindowsSleepPreventionHandle(handle);
+    if unsafe { PowerSetRequest(request.0, POWER_REQUEST_SYSTEM_REQUIRED) } == 0 {
+        return Err("Failed to enable Windows sleep prevention.".to_string());
+    }
+
+    Ok(request)
+}
+
+#[tauri::command]
+fn set_ai_translation_sleep_prevention(
+    store: State<SleepPreventionStore>,
+    enabled: bool,
+) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        let mut guard = store
+            .lock()
+            .map_err(|_| "Failed to lock sleep prevention state.".to_string())?;
+
+        if !enabled {
+            *guard = None;
+            return Ok(());
+        }
+
+        if guard.is_none() {
+            *guard = Some(create_windows_sleep_prevention_request()?);
+        }
+
+        return Ok(());
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        let _ = store;
+        let _ = enabled;
+        return Ok(());
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let mut guard = store
+            .lock()
+            .map_err(|_| "Failed to lock sleep prevention state.".to_string())?;
+
+        if !enabled {
+            if let Some(mut child) = guard.take() {
+                stop_sleep_prevention_process(&mut child)?;
+            }
+            return Ok(());
+        }
+
+        if guard.is_some() {
+            return Ok(());
+        }
+
+        let pid = std::process::id().to_string();
+        let child = Command::new("caffeinate")
+            .args(["-d", "-i", "-w", &pid])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .map_err(|error| format!("Failed to start macOS sleep prevention: {error}"))?;
+        *guard = Some(child);
+
+        Ok(())
+    }
 }
 
 #[tauri::command]
@@ -648,11 +823,9 @@ fn set_history_menu_enabled(
     };
 
     #[cfg(target_os = "macos")]
-    set_menu_item_enabled(&app, undo_id, can_undo)
-        .map_err(|error| error.to_string())?;
+    set_menu_item_enabled(&app, undo_id, can_undo).map_err(|error| error.to_string())?;
     #[cfg(target_os = "macos")]
-    set_menu_item_enabled(&app, redo_id, can_redo)
-        .map_err(|error| error.to_string())?;
+    set_menu_item_enabled(&app, redo_id, can_redo).map_err(|error| error.to_string())?;
     Ok(())
 }
 
@@ -895,9 +1068,7 @@ fn menu_label(language: &str, key: &str) -> &'static str {
                 "Tools"
             }
         }
-        "hex" => {
-            "Hex"
-        }
+        "hex" => "Hex",
         "statistics" => {
             if zh {
                 "统计"
@@ -973,6 +1144,20 @@ fn menu_label(language: &str, key: &str) -> &'static str {
                 "跳转到行..."
             } else {
                 "Go to Row..."
+            }
+        }
+        "previous_selected_row" => {
+            if zh {
+                "跳转到上一个选中行"
+            } else {
+                "Previous Selected Row"
+            }
+        }
+        "next_selected_row" => {
+            if zh {
+                "跳转到下一个选中行"
+            } else {
+                "Next Selected Row"
             }
         }
         "encoding_manager" => {
@@ -1205,6 +1390,20 @@ fn build_encoding_menu_for<R: Runtime>(
     .accelerator(shortcut_accelerator(ENCODING_GO_TO_ROW_MENU_ID))
     .build(app)?;
 
+    let previous_selected_row = MenuItemBuilder::with_id(
+        ENCODING_PREVIOUS_SELECTED_ROW_MENU_ID,
+        menu_label(language, "previous_selected_row"),
+    )
+    .accelerator(shortcut_accelerator(ENCODING_PREVIOUS_SELECTED_ROW_MENU_ID))
+    .build(app)?;
+
+    let next_selected_row = MenuItemBuilder::with_id(
+        ENCODING_NEXT_SELECTED_ROW_MENU_ID,
+        menu_label(language, "next_selected_row"),
+    )
+    .accelerator(shortcut_accelerator(ENCODING_NEXT_SELECTED_ROW_MENU_ID))
+    .build(app)?;
+
     let clear_list = MenuItemBuilder::with_id(
         ENCODING_CLEAR_LIST_MENU_ID,
         menu_label(language, "clear_list"),
@@ -1372,6 +1571,8 @@ fn build_encoding_menu_for<R: Runtime>(
         .item(&find)
         .item(&find_replace)
         .item(&go_to_row)
+        .item(&previous_selected_row)
+        .item(&next_selected_row)
         .item(&tools_separator_1)
         .item(&select_all_filtered)
         .item(&deselect_all)
@@ -1457,6 +1658,20 @@ fn build_main_menu_for_with_columns<R: Runtime>(
         .accelerator(shortcut_accelerator(GO_TO_ROW_MENU_ID))
         .build(app)?;
 
+    let previous_selected_row = MenuItemBuilder::with_id(
+        PREVIOUS_SELECTED_ROW_MENU_ID,
+        menu_label(language, "previous_selected_row"),
+    )
+    .accelerator(shortcut_accelerator(PREVIOUS_SELECTED_ROW_MENU_ID))
+    .build(app)?;
+
+    let next_selected_row = MenuItemBuilder::with_id(
+        NEXT_SELECTED_ROW_MENU_ID,
+        menu_label(language, "next_selected_row"),
+    )
+    .accelerator(shortcut_accelerator(NEXT_SELECTED_ROW_MENU_ID))
+    .build(app)?;
+
     let open_encoding_manager = MenuItemBuilder::with_id(
         OPEN_ENCODING_MANAGER_MENU_ID,
         menu_label(language, "encoding_manager"),
@@ -1490,12 +1705,10 @@ fn build_main_menu_for_with_columns<R: Runtime>(
     .accelerator(shortcut_accelerator(DELETE_SELECTED_MENU_ID))
     .build(app)?;
 
-    let copy_selected = MenuItemBuilder::with_id(
-        COPY_SELECTED_MENU_ID,
-        menu_label(language, "copy_selected"),
-    )
-    .accelerator(shortcut_accelerator(COPY_SELECTED_MENU_ID))
-    .build(app)?;
+    let copy_selected =
+        MenuItemBuilder::with_id(COPY_SELECTED_MENU_ID, menu_label(language, "copy_selected"))
+            .accelerator(shortcut_accelerator(COPY_SELECTED_MENU_ID))
+            .build(app)?;
 
     #[cfg(target_os = "macos")]
     let undo_table_change = MenuItemBuilder::with_id(
@@ -1621,6 +1834,8 @@ fn build_main_menu_for_with_columns<R: Runtime>(
         .item(&find)
         .item(&find_replace)
         .item(&go_to_row)
+        .item(&previous_selected_row)
+        .item(&next_selected_row)
         .item(&tools_separator_1)
         .item(&select_all_filtered)
         .item(&deselect_all)
@@ -1786,6 +2001,12 @@ fn emit_encoding_menu_event<R: Runtime>(app: &AppHandle<R>, menu_id: &str) {
         ENCODING_GO_TO_ROW_MENU_ID => {
             let _ = app.emit_to("encoding", "encoding-open-go-to-row", ());
         }
+        ENCODING_PREVIOUS_SELECTED_ROW_MENU_ID => {
+            let _ = app.emit_to("encoding", "encoding-jump-to-previous-selected-row", ());
+        }
+        ENCODING_NEXT_SELECTED_ROW_MENU_ID => {
+            let _ = app.emit_to("encoding", "encoding-jump-to-next-selected-row", ());
+        }
         ENCODING_OPEN_SEARCH_PANEL_MENU_ID => {
             let _ = app.emit_to("encoding", "encoding-open-search-panel", ());
         }
@@ -1873,6 +2094,12 @@ fn emit_main_menu_event<R: Runtime>(app: &AppHandle<R>, menu_id: &str) {
     match menu_id {
         GO_TO_ROW_MENU_ID => {
             let _ = app.emit_to("main", "open-go-to-row", ());
+        }
+        PREVIOUS_SELECTED_ROW_MENU_ID => {
+            let _ = app.emit_to("main", "jump-to-previous-selected-row", ());
+        }
+        NEXT_SELECTED_ROW_MENU_ID => {
+            let _ = app.emit_to("main", "jump-to-next-selected-row", ());
         }
         OPEN_SEARCH_PANEL_MENU_ID => {
             let _ = app.emit_to("main", "open-search-panel", ());
@@ -2029,6 +2256,7 @@ pub fn run() {
     tauri::Builder::default()
         .manage(SentenceCoverageStore::default())
         .manage(NativeMenuStateStore::default())
+        .manage(SleepPreventionStore::default())
         .menu(build_main_menu)
         .setup(|app| {
             if let Some(window) = app.get_webview_window("main") {
@@ -2079,6 +2307,8 @@ pub fn run() {
                             | ENCODING_EXPORT_MENU_ID
                             | ENCODING_EXPORT_EXCEL_MENU_ID
                             | ENCODING_GO_TO_ROW_MENU_ID
+                            | ENCODING_PREVIOUS_SELECTED_ROW_MENU_ID
+                            | ENCODING_NEXT_SELECTED_ROW_MENU_ID
                             | ENCODING_OPEN_SEARCH_PANEL_MENU_ID
                             | ENCODING_OPEN_FIND_REPLACE_MENU_ID
                             | ENCODING_TOGGLE_TOP_PANEL_MENU_ID
@@ -2107,6 +2337,22 @@ pub fn run() {
                                 let _ = app.emit_to("encoding", "encoding-open-go-to-row", ());
                                 return;
                             }
+                            PREVIOUS_SELECTED_ROW_MENU_ID => {
+                                let _ = app.emit_to(
+                                    "encoding",
+                                    "encoding-jump-to-previous-selected-row",
+                                    (),
+                                );
+                                return;
+                            }
+                            NEXT_SELECTED_ROW_MENU_ID => {
+                                let _ = app.emit_to(
+                                    "encoding",
+                                    "encoding-jump-to-next-selected-row",
+                                    (),
+                                );
+                                return;
+                            }
                             _ => {}
                         }
                     }
@@ -2131,6 +2377,7 @@ pub fn run() {
             read_app_draft,
             save_llm_api_key,
             set_app_language_menu,
+            set_ai_translation_sleep_prevention,
             set_sentence_coverage_source,
             set_history_menu_enabled,
             set_main_column_visibility_menu,

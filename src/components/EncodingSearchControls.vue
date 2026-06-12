@@ -44,11 +44,28 @@ const isCaseSensitiveSearch = defineModel<boolean>("isCaseSensitiveSearch", {
 const selectedSearchColumns = defineModel<(keyof EncodingRow)[]>("selectedSearchColumns", {
   required: true,
 });
+const filterJoinMode = defineModel<"or" | "and">("filterJoinMode", {
+  required: true,
+});
 const rowFilterStart = defineModel<string>("rowFilterStart", { required: true });
 const rowFilterEnd = defineModel<string>("rowFilterEnd", { required: true });
 const goToRowValue = defineModel<string>("goToRowValue", { required: true });
 
 const searchInput = ref<HTMLInputElement | null>(null);
+const characterTypeFilters: EncodingFilter[] = [
+  "punctuation",
+  "han",
+  "kana",
+  "hangul",
+  "latin",
+  "special",
+];
+const conditionFilters: EncodingFilter[] = [
+  "duplicate_character",
+  "duplicate_code",
+  "empty_character",
+  "empty_code",
+];
 
 function focusSearchInput() {
   nextTick(() => {
@@ -107,7 +124,23 @@ defineExpose({ focusSearchInput });
           {{ t("common.all") }} {{ rowsLength }}
         </button>
         <button
-          v-for="filter in filterOptions"
+          v-for="filter in characterTypeFilters.filter((filter) => filterOptions.includes(filter))"
+          :key="filter"
+          type="button"
+          :class="{ active: activeFilters.includes(filter) }"
+          @click="emit('toggleFilter', filter)"
+        >
+          {{ filterLabel(filter) }} {{ filterCounts[filter] }}
+        </button>
+        <label class="stat-join-control" :title="t('main.statFilterJoinHint')">
+          <span>{{ t("main.statFilterJoin") }}</span>
+          <select v-model="filterJoinMode" aria-label="Encoding filter relation">
+            <option value="or">{{ t("main.filterOr") }}</option>
+            <option value="and">{{ t("main.filterAnd") }}</option>
+          </select>
+        </label>
+        <button
+          v-for="filter in conditionFilters.filter((filter) => filterOptions.includes(filter))"
           :key="filter"
           type="button"
           :class="{ active: activeFilters.includes(filter) }"

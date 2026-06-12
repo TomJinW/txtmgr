@@ -121,6 +121,7 @@ const searchLengthColumn = ref<TextSearchKey>("translated_text");
 const searchLengthMin = ref("");
 const searchLengthMax = ref("");
 const activeStatFilters = ref<StatFilter[]>([]);
+const statFilterJoinMode = ref<"or" | "and">("or");
 const goToRowValue = ref("");
 const rowFilterStart = ref("");
 const rowFilterEnd = ref("");
@@ -169,6 +170,7 @@ const aiTranslationErrorCount = ref(0);
 const aiTranslationMessage = ref(t("common.ready"));
 const isAiTranslationStopRequested = ref(false);
 const isAiTranslationFakeMode = ref(false);
+const isAiTranslationSleepPreventionEnabled = ref(true);
 const llmApiKeyInput = ref("");
 const hasStoredLlmApiKey = ref(false);
 const isTestingLlmConnection = ref(false);
@@ -281,6 +283,8 @@ let autoSaveTimer: number | undefined;
 let columnWidthSaveTimer: number | undefined;
 let nextRowIdentity = 1;
 let unlistenOpenGoToRow: UnlistenFn | undefined;
+let unlistenJumpToPreviousSelectedRow: UnlistenFn | undefined;
+let unlistenJumpToNextSelectedRow: UnlistenFn | undefined;
 let unlistenReadJson: UnlistenFn | undefined;
 let unlistenSaveJson: UnlistenFn | undefined;
 let unlistenSaveJsonAs: UnlistenFn | undefined;
@@ -703,6 +707,7 @@ watch(
     textMatchMode.value,
     String(isCaseSensitiveSearch.value),
     activeStatFilters.value.map(statFilterKey).join("|"),
+    statFilterJoinMode.value,
     selectedSearchColumns.value.join("|"),
     searchLengthColumn.value,
     searchLengthMin.value,
@@ -792,6 +797,8 @@ onBeforeUnmount(() => {
   rowResizeObservers.clear();
   rowElements.clear();
   unlistenOpenGoToRow?.();
+  unlistenJumpToPreviousSelectedRow?.();
+  unlistenJumpToNextSelectedRow?.();
   unlistenReadJson?.();
   unlistenSaveJson?.();
   unlistenSaveJsonAs?.();
@@ -856,6 +863,10 @@ function isWindowsPlatform() {
 
 function isMacPlatform() {
   return /Macintosh|Mac OS X/i.test(window.navigator.userAgent);
+}
+
+function isAiTranslationSleepPreventionSupported() {
+  return isMacPlatform() || isWindowsPlatform();
 }
 
 function handleWindowFocus() {
@@ -930,6 +941,30 @@ function handleGlobalShortcut(event: KeyboardEvent) {
     return;
   }
 
+  if (
+    !editableEventTarget(event.target) &&
+    !isSearchOverlayOpen.value &&
+    !hasOpenMainDialog() &&
+    !hasActiveMainDialogTask() &&
+    shortcutMatches(event, "previous_selected_row", isMacPlatform())
+  ) {
+    event.preventDefault();
+    void jumpToSelectedRow("previous");
+    return;
+  }
+
+  if (
+    !editableEventTarget(event.target) &&
+    !isSearchOverlayOpen.value &&
+    !hasOpenMainDialog() &&
+    !hasActiveMainDialogTask() &&
+    shortcutMatches(event, "next_selected_row", isMacPlatform())
+  ) {
+    event.preventDefault();
+    void jumpToSelectedRow("next");
+    return;
+  }
+
   if (shortcutMatches(event, "open_search_panel", isMacPlatform())) {
     event.preventDefault();
     if (hasOpenMainDialog()) return;
@@ -991,6 +1026,8 @@ function handleWindowsMenuShortcut(event: KeyboardEvent) {
 
   const actions: { action: ShortcutAction; run: () => void }[] = [
     { action: "go_to_row", run: () => openGoToRowDialog() },
+    { action: "previous_selected_row", run: () => void jumpToSelectedRow("previous") },
+    { action: "next_selected_row", run: () => void jumpToSelectedRow("next") },
     { action: "read_json", run: () => openFilePicker() },
     { action: "save_json", run: () => void saveJsonFile() },
     { action: "save_json_as", run: () => void saveJsonFileAs() },
@@ -1039,6 +1076,26 @@ function registerMenuListeners() {
     })
     .catch((error) => {
       console.warn("Failed to register go to row menu listener.", error);
+    });
+
+  listen("jump-to-previous-selected-row", () => {
+    void jumpToSelectedRow("previous");
+  })
+    .then((unlisten) => {
+      unlistenJumpToPreviousSelectedRow = unlisten;
+    })
+    .catch((error) => {
+      console.warn("Failed to register previous selected row menu listener.", error);
+    });
+
+  listen("jump-to-next-selected-row", () => {
+    void jumpToSelectedRow("next");
+  })
+    .then((unlisten) => {
+      unlistenJumpToNextSelectedRow = unlisten;
+    })
+    .catch((error) => {
+      console.warn("Failed to register next selected row menu listener.", error);
     });
 
   listen("read-json", () => {
@@ -1543,6 +1600,7 @@ function openAiTranslationResultDialog() {
     return;
   }
 
+  pruneAiTranslationResultSelection();
   openMainDialog("aiTranslationSession");
 }
 
@@ -1605,6 +1663,31 @@ function selectAllAiTranslationResults() {
     selectableIds.length > 0 && selectableIds.every((taskId) => selectedIds.has(taskId));
 
   selectedAiTranslationTaskIds.value = allSelected ? new Set() : new Set(selectableIds);
+}
+
+function clearAiTranslationResultSelection() {
+  selectedAiTranslationTaskIds.value = new Set();
+}
+
+function pruneAiTranslationResultSelection() {
+  const result = aiTranslationSession.value;
+  if (!result || selectedAiTranslationTaskIds.value.size === 0) {
+    clearAiTranslationResultSelection();
+    return;
+  }
+
+  const selectableIds = new Set(
+    result.tasks.filter((task) => isSelectableAiTranslationTask(task)).map((task) => task.id),
+  );
+  const nextSelectedIds = new Set(
+    Array.from(selectedAiTranslationTaskIds.value).filter((taskId) =>
+      selectableIds.has(taskId),
+    ),
+  );
+
+  if (nextSelectedIds.size !== selectedAiTranslationTaskIds.value.size) {
+    selectedAiTranslationTaskIds.value = nextSelectedIds;
+  }
 }
 
 function applySelectedAiTranslationResults() {
@@ -1673,6 +1756,7 @@ function applySelectedAiTranslationResultsWithOptions() {
     ...result,
     tasks: nextTasks,
   };
+  pruneAiTranslationResultSelection();
   markStatSnapshotDirty();
   const appliedTargetMessage = `${t("ai.appliedResultsToTarget")} ${target}`;
   const appliedMessage = updateAiTranslationStateOnApply.value
@@ -1804,6 +1888,7 @@ async function translateWithAi() {
   }
 
   isPreparingAiTranslation.value = true;
+  clearAiTranslationResultSelection();
   isAiTranslationStopRequested.value = false;
   aiTranslationCompletedCount.value = 0;
   aiTranslationErrorCount.value = 0;
@@ -1816,6 +1901,7 @@ async function translateWithAi() {
   errorMessage.value = "";
   closeMainDialogs();
   isAiTranslationDialogOpen.value = true;
+  await setAiTranslationSleepPrevention(isAiTranslationSleepPreventionEnabled.value);
 
   // Give the run dialog one frame to paint before doing per-row async work,
   // otherwise the first visible feedback can feel delayed on slower machines.
@@ -1877,6 +1963,7 @@ async function translateWithAi() {
       attachmentPath: aiTranslationSettings.value.attachmentPath,
       tasks: finalTasks,
     };
+    clearAiTranslationResultSelection();
     aiTranslationSessionMessage.value =
       finalTasks.length === 0
         ? t("ai.noRowsMatchScope")
@@ -1898,6 +1985,7 @@ async function translateWithAi() {
     errorMessage.value = aiTranslationMessage.value;
     statusMessage.value = "";
   } finally {
+    await setAiTranslationSleepPrevention(false);
     isPreparingAiTranslation.value = false;
     aiTranslationFinishedText.value = "";
     aiTranslationFinishedPreview.value = "";
@@ -2015,17 +2103,21 @@ function buildAiTranslationPrompt(task: AiTranslationTask, attachmentText = "") 
   const row = rows.value[task.rowIndex];
   const replacements: Record<string, string> = {
     attachment_text: attachmentText,
-    existing_translation: task.existingTranslation,
-    file_name: task.fileName,
     nearby_rows: nearbyRowsForPrompt(task.rowIndex),
-    note: row?.note ?? "",
-    original_text: task.originalText,
     source_language: settings.sourceLanguage,
-    state: row?.state ?? "",
     target_language: settings.targetLanguage,
-    title_addr: task.titleAddr,
-    translated_text: task.existingTranslation,
   };
+
+  for (const column of columns) {
+    if (column.key === "row_number") continue;
+    const columnKey = column.key;
+    replacements[columnKey] = row ? toText(row[columnKey]) : "";
+  }
+
+  replacements.existing_translation = replacements.translated_text ?? task.existingTranslation;
+  replacements.file_name = replacements.file_name ?? task.fileName;
+  replacements.original_text = replacements.original_text ?? task.originalText;
+  replacements.title_addr = replacements.title_addr ?? task.titleAddr;
 
   return settings.promptTemplate.replace(/\{([a-z_]+)\}/g, (match, key: string) =>
     Object.prototype.hasOwnProperty.call(replacements, key) ? replacements[key] : match,
@@ -2066,6 +2158,24 @@ async function waitForAiTranslationStep(milliseconds: number) {
 function stopAiTranslationRun() {
   isAiTranslationStopRequested.value = true;
   aiTranslationMessage.value = t("ai.stoppingTranslation");
+}
+
+async function setAiTranslationSleepPrevention(enabled: boolean) {
+  if (!isAiTranslationSleepPreventionSupported()) return;
+
+  try {
+    await invoke("set_ai_translation_sleep_prevention", { enabled });
+  } catch (error) {
+    aiTranslationMessage.value = formatError(error, t("ai.failedSleepPrevention"));
+    statusMessage.value = aiTranslationMessage.value;
+  }
+}
+
+function updateAiTranslationSleepPrevention(enabled: boolean) {
+  isAiTranslationSleepPreventionEnabled.value = enabled;
+  if (isPreparingAiTranslation.value) {
+    void setAiTranslationSleepPrevention(enabled);
+  }
 }
 
 function updateLlmSettings(settings: LlmServerSettings) {
@@ -2450,6 +2560,7 @@ async function confirmExcelImport() {
     clearSelectedRows();
     pendingDeleteIndex.value = null;
     resetVirtualRowState();
+    resetSearchFilters();
     refreshStatSnapshot();
     closeExcelImportDialog();
     statusMessage.value = excelImportAppendRows.value
@@ -2578,6 +2689,7 @@ async function confirmSrtImport() {
     clearSelectedRows();
     pendingDeleteIndex.value = null;
     resetVirtualRowState();
+    resetSearchFilters();
     refreshStatSnapshot();
     closeSrtImportDialog();
     statusMessage.value = srtImportAppendRows.value
@@ -3107,6 +3219,7 @@ async function loadJsonFromPath(path: string) {
     clearSelectedRows();
     jsonPath.value = path;
     fileName.value = pathBaseName(path);
+    resetSearchFilters();
     refreshStatSnapshot();
     statusMessage.value = t("message.loadedAndAutoSaved");
   } catch (error) {
@@ -4315,6 +4428,59 @@ async function goToRow() {
   return true;
 }
 
+async function jumpToSelectedRow(direction: "previous" | "next") {
+  const selectedFilteredIndexes = filteredRows.value
+    .map((item, filteredIndex) => ({ item, filteredIndex }))
+    .filter(({ item }) => selectedRowIds.value.has(getRowIdentity(item.row)))
+    .map(({ filteredIndex }) => filteredIndex);
+
+  if (selectedFilteredIndexes.length === 0) {
+    statusMessage.value = "";
+    errorMessage.value = t("message.noRowsSelected");
+    return false;
+  }
+
+  const currentFilteredIndex = currentFilteredIndexFromScrollTop();
+  const targetFilteredIndex =
+    direction === "next"
+      ? (selectedFilteredIndexes.find((index) => index > currentFilteredIndex) ??
+        selectedFilteredIndexes[0])
+      : ([...selectedFilteredIndexes]
+          .reverse()
+          .find((index) => index < currentFilteredIndex) ??
+        selectedFilteredIndexes[selectedFilteredIndexes.length - 1]);
+
+  const target = filteredRows.value[targetFilteredIndex];
+  if (!target) return false;
+
+  const nextScrollTop = sumRowHeights(filteredRows.value, 0, targetFilteredIndex);
+  tableScrollTop.value = nextScrollTop;
+  if (tableWrap.value) {
+    tableWrap.value.scrollTop = nextScrollTop;
+  }
+  updateTableViewport();
+  await nextTick();
+  alignRenderedRow(target.row);
+
+  errorMessage.value = "";
+  statusMessage.value = `${t("message.jumpedToRow")} ${target.index + 1}.`;
+  return true;
+}
+
+function currentFilteredIndexFromScrollTop() {
+  const items = filteredRows.value;
+  if (items.length === 0) return 0;
+
+  const scrollTop = tableWrap.value?.scrollTop ?? tableScrollTop.value;
+  let offset = 0;
+  for (let index = 0; index < items.length; index += 1) {
+    offset += rowHeight(items[index].row);
+    if (offset > scrollTop + 1) return index;
+  }
+
+  return items.length - 1;
+}
+
 function openFindReplaceBar() {
   isFindReplaceOpen.value = true;
   if (findReplaceColumns.value.length === 0) {
@@ -5293,6 +5459,7 @@ function resetSearchFilters() {
   searchLengthMax.value = "";
   selectedSearchColumns.value = textSearchColumns.map((column) => column.key);
   activeStatFilters.value = [];
+  statFilterJoinMode.value = "or";
   rowFilterStart.value = "";
   rowFilterEnd.value = "";
 }
@@ -5329,7 +5496,23 @@ function statFilterKey(filter: StatFilter) {
 function rowMatchesStatFilter(row: SentenceRow) {
   if (activeStatFilters.value.length === 0) return true;
 
-  return activeStatFilters.value.some((filter) => rowMatchesSingleStatFilter(row, filter));
+  const stateFilters = activeStatFilters.value.filter((filter) => filter.type === "state");
+  const categoryFilters = activeStatFilters.value.filter((filter) => filter.type !== "state");
+  const matchesStateGroup =
+    stateFilters.length === 0 ||
+    stateFilters.some((filter) => rowMatchesSingleStatFilter(row, filter));
+  const matchesCategoryGroup =
+    categoryFilters.length === 0 ||
+    categoryFilters.some((filter) => rowMatchesSingleStatFilter(row, filter));
+
+  if (statFilterJoinMode.value === "and") {
+    return matchesStateGroup && matchesCategoryGroup;
+  }
+
+  return (
+    (stateFilters.length > 0 && matchesStateGroup) ||
+    (categoryFilters.length > 0 && matchesCategoryGroup)
+  );
 }
 
 function rowMatchesSingleStatFilter(row: SentenceRow, filter: StatFilter) {
@@ -5654,6 +5837,7 @@ function startResize(columnIndex: number, event: PointerEvent) {
         v-model:search-length-min="searchLengthMin"
         v-model:search-length-max="searchLengthMax"
         v-model:selected-search-columns="selectedSearchColumns"
+        v-model:stat-filter-join-mode="statFilterJoinMode"
         v-model:row-filter-start="rowFilterStart"
         v-model:row-filter-end="rowFilterEnd"
         v-model:go-to-row-value="goToRowValue"
@@ -5701,6 +5885,7 @@ function startResize(columnIndex: number, event: PointerEvent) {
             v-model:search-length-min="searchLengthMin"
             v-model:search-length-max="searchLengthMax"
             v-model:selected-search-columns="selectedSearchColumns"
+            v-model:stat-filter-join-mode="statFilterJoinMode"
             v-model:row-filter-start="rowFilterStart"
             v-model:row-filter-end="rowFilterEnd"
             v-model:go-to-row-value="goToRowValue"
@@ -6081,6 +6266,7 @@ function startResize(columnIndex: number, event: PointerEvent) {
 
     <AiTranslationDialog
       v-if="isAiTranslationDialogOpen"
+      :available-prompt-columns="columns.filter((column) => column.key !== 'row_number').map((column) => column.key)"
       :has-result="aiTranslationSession !== null"
       :is-error="errorMessage !== '' && errorMessage === aiTranslationMessage"
       :is-fake-mode="isAiTranslationFakeMode"
@@ -6106,8 +6292,11 @@ function startResize(columnIndex: number, event: PointerEvent) {
       :error-count="aiTranslationErrorCount"
       :is-stopping="isAiTranslationStopRequested"
       :message="aiTranslationMessage"
+      :prevent-sleep-enabled="isAiTranslationSleepPreventionEnabled"
+      :prevent-sleep-supported="isAiTranslationSleepPreventionSupported()"
       :total-count="aiTranslationRowCount"
       @stop="stopAiTranslationRun"
+      @update-prevent-sleep="updateAiTranslationSleepPrevention"
     />
 
     <AiTranslationSessionDialog
@@ -6769,6 +6958,29 @@ button {
   font-size: 11px;
   line-height: 1.2;
   white-space: nowrap;
+}
+
+.stat-join-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid var(--control-border);
+  border-radius: 6px;
+  padding: 2px 5px;
+  color: var(--text-soft);
+  background: var(--table-header-bg);
+  font-size: 11px;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.stat-join-control select {
+  min-height: 20px;
+  border: 0;
+  padding: 0 16px 0 2px;
+  color: var(--text);
+  background: transparent;
+  font-size: 11px;
 }
 
 .reset-search-btn {

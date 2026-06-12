@@ -162,6 +162,7 @@ const searchText = ref("");
 const isCaseSensitiveSearch = ref(false);
 const selectedSearchColumns = ref<(keyof EncodingRow)[]>([...searchableColumns]);
 const activeFilters = ref<EncodingFilter[]>([]);
+const filterJoinMode = ref<"or" | "and">("or");
 const selectedRowIds = ref<Set<number>>(new Set());
 const selectionAnchorRowId = ref<number | null>(null);
 type TableInteractionMode = "edit" | "select";
@@ -346,6 +347,8 @@ let unlistenEncodingOpenUnmappedCharacters: UnlistenFn | undefined;
 let unlistenEncodingOpenUnusedEncodings: UnlistenFn | undefined;
 let unlistenEncodingOpenLineLength: UnlistenFn | undefined;
 let unlistenEncodingOpenGoToRow: UnlistenFn | undefined;
+let unlistenEncodingJumpToPreviousSelectedRow: UnlistenFn | undefined;
+let unlistenEncodingJumpToNextSelectedRow: UnlistenFn | undefined;
 let unlistenEncodingClearList: UnlistenFn | undefined;
 let unlistenEncodingDeleteSelected: UnlistenFn | undefined;
 let unlistenEncodingCopySelected: UnlistenFn | undefined;
@@ -447,15 +450,13 @@ const duplicateCharacterIds = computed(() => {
 const filteredRows = computed(() => {
   const query = normalizeSearchValue(searchText.value.trim());
 
-  // Search text, category filters, and row range are conjunctive. Individual
-  // category buttons remain a union inside activeFilters.
+  // Search text, grouped filters, and row range are conjunctive. Each filter
+  // group remains a union; filterJoinMode controls how the groups combine.
   return rows.value
     .map((row, index) => ({ row, index }))
     .filter(({ row, index }) => {
       const textMatches = rowMatchesSearch(row, query);
-      const filterMatches =
-        activeFilters.value.length === 0 ||
-        activeFilters.value.some((filter) => rowMatchesFilter(row, filter));
+      const filterMatches = rowMatchesActiveFilters(row);
 
       return textMatches && filterMatches && rowMatchesRowRange(index);
     });
@@ -751,6 +752,7 @@ watch(
     searchText.value,
     String(isCaseSensitiveSearch.value),
     activeFilters.value.join("|"),
+    filterJoinMode.value,
     selectedSearchColumns.value.join("|"),
     rowFilterStart.value,
     rowFilterEnd.value,
@@ -835,6 +837,8 @@ onBeforeUnmount(() => {
   unlistenEncodingOpenUnusedEncodings?.();
   unlistenEncodingOpenLineLength?.();
   unlistenEncodingOpenGoToRow?.();
+  unlistenEncodingJumpToPreviousSelectedRow?.();
+  unlistenEncodingJumpToNextSelectedRow?.();
   unlistenEncodingClearList?.();
   unlistenEncodingDeleteSelected?.();
   unlistenEncodingCopySelected?.();
@@ -932,6 +936,30 @@ function handleGlobalShortcut(event: KeyboardEvent) {
     return;
   }
 
+  if (
+    !editableEventTarget(event.target) &&
+    !isSearchOverlayOpen.value &&
+    !hasOpenEncodingDialog() &&
+    !hasActiveEncodingDialogTask() &&
+    shortcutMatches(event, "encoding_previous_selected_row", isMacPlatform())
+  ) {
+    event.preventDefault();
+    void jumpToSelectedRow("previous");
+    return;
+  }
+
+  if (
+    !editableEventTarget(event.target) &&
+    !isSearchOverlayOpen.value &&
+    !hasOpenEncodingDialog() &&
+    !hasActiveEncodingDialogTask() &&
+    shortcutMatches(event, "encoding_next_selected_row", isMacPlatform())
+  ) {
+    event.preventDefault();
+    void jumpToSelectedRow("next");
+    return;
+  }
+
   if (shortcutMatches(event, "encoding_open_search_panel", isMacPlatform())) {
     event.preventDefault();
     if (hasOpenEncodingDialog()) return;
@@ -964,6 +992,8 @@ function handleWindowsMenuShortcut(event: KeyboardEvent) {
     { action: "encoding_export", run: () => openExportDialog() },
     { action: "encoding_export_excel", run: () => openExcelExportDialog() },
     { action: "encoding_go_to_row", run: () => openGoToRowDialog() },
+    { action: "encoding_previous_selected_row", run: () => void jumpToSelectedRow("previous") },
+    { action: "encoding_next_selected_row", run: () => void jumpToSelectedRow("next") },
     { action: "encoding_open_find_replace", run: () => toggleFindReplaceBar() },
     { action: "encoding_clear_list", run: () => void clearRows() },
     { action: "encoding_delete_selected", run: () => void deleteSelectedRows() },
@@ -1080,6 +1110,26 @@ function registerMenuListeners() {
     })
     .catch((error) => {
       console.warn("Failed to register encoding go to row menu listener.", error);
+    });
+
+  listen("encoding-jump-to-previous-selected-row", () => {
+    void jumpToSelectedRow("previous");
+  })
+    .then((unlisten) => {
+      unlistenEncodingJumpToPreviousSelectedRow = unlisten;
+    })
+    .catch((error) => {
+      console.warn("Failed to register encoding previous selected row menu listener.", error);
+    });
+
+  listen("encoding-jump-to-next-selected-row", () => {
+    void jumpToSelectedRow("next");
+  })
+    .then((unlisten) => {
+      unlistenEncodingJumpToNextSelectedRow = unlisten;
+    })
+    .catch((error) => {
+      console.warn("Failed to register encoding next selected row menu listener.", error);
     });
 
   listen("encoding-clear-list", () => {
@@ -1486,6 +1536,7 @@ async function loadJsonFromPath(path: string) {
     selectionAnchorRowId.value = null;
     pendingDeleteIndex.value = null;
     resetVirtualRowState();
+    resetSearchFilters();
     statusMessage.value = `${t("message.loadedRows")}: ${importedRows.length} ${t("message.rows")}.`;
   } catch (error) {
     errorMessage.value =
@@ -2607,6 +2658,7 @@ async function confirmImportText() {
     selectionAnchorRowId.value = null;
     pendingDeleteIndex.value = null;
     resetVirtualRowState();
+    resetSearchFilters();
     closeImportDialog();
     statusMessage.value = importAppendRows.value
       ? `${t("message.appended")}: ${importedRows.length} ${t("message.rows")}.`
@@ -2662,6 +2714,7 @@ async function confirmExcelImport() {
     selectionAnchorRowId.value = null;
     pendingDeleteIndex.value = null;
     resetVirtualRowState();
+    resetSearchFilters();
     closeExcelImportDialog();
     statusMessage.value = excelImportAppendRows.value
       ? `${t("message.excelAppended")}: ${importedRows.length} ${t("message.rows")}.`
@@ -3928,6 +3981,59 @@ function goToRow() {
   return true;
 }
 
+async function jumpToSelectedRow(direction: "previous" | "next") {
+  const selectedFilteredIndexes = filteredRows.value
+    .map((item, visibleIndex) => ({ item, visibleIndex }))
+    .filter(({ item }) => selectedRowIds.value.has(getRowIdentity(item.row)))
+    .map(({ visibleIndex }) => visibleIndex);
+
+  if (selectedFilteredIndexes.length === 0) {
+    statusMessage.value = "";
+    errorMessage.value = t("message.noRowsSelected");
+    return false;
+  }
+
+  const currentVisibleIndex = currentFilteredIndexFromScrollTop();
+  const targetVisibleIndex =
+    direction === "next"
+      ? (selectedFilteredIndexes.find((index) => index > currentVisibleIndex) ??
+        selectedFilteredIndexes[0])
+      : ([...selectedFilteredIndexes]
+          .reverse()
+          .find((index) => index < currentVisibleIndex) ??
+        selectedFilteredIndexes[selectedFilteredIndexes.length - 1]);
+
+  const target = filteredRows.value[targetVisibleIndex];
+  if (!target) return false;
+
+  const nextScrollTop = sumRowHeights(filteredRows.value, 0, targetVisibleIndex);
+  tableScrollTop.value = nextScrollTop;
+  if (tableWrap.value) {
+    tableWrap.value.scrollTop = nextScrollTop;
+  }
+  updateTableViewport();
+  await nextTick();
+  alignRenderedRow(target.row);
+
+  errorMessage.value = "";
+  statusMessage.value = `${t("message.jumpedToRow")} ${target.index + 1}.`;
+  return true;
+}
+
+function currentFilteredIndexFromScrollTop() {
+  const items = filteredRows.value;
+  if (items.length === 0) return 0;
+
+  const scrollTop = tableWrap.value?.scrollTop ?? tableScrollTop.value;
+  let offset = 0;
+  for (let index = 0; index < items.length; index += 1) {
+    offset += rowHeight(items[index].row);
+    if (offset > scrollTop + 1) return index;
+  }
+
+  return items.length - 1;
+}
+
 function openFindReplaceBar() {
   isFindReplaceOpen.value = true;
   if (findReplaceColumns.value.length === 0) {
@@ -4207,8 +4313,44 @@ function resetSearchFilters() {
   isCaseSensitiveSearch.value = false;
   selectedSearchColumns.value = [...searchableColumns];
   activeFilters.value = [];
+  filterJoinMode.value = "or";
   rowFilterStart.value = "";
   rowFilterEnd.value = "";
+}
+
+function isCharacterTypeFilter(filter: EncodingFilter) {
+  return (
+    filter === "punctuation" ||
+    filter === "han" ||
+    filter === "kana" ||
+    filter === "hangul" ||
+    filter === "latin" ||
+    filter === "special"
+  );
+}
+
+function rowMatchesActiveFilters(row: EncodingRow) {
+  if (activeFilters.value.length === 0) return true;
+
+  const characterFilters = activeFilters.value.filter(isCharacterTypeFilter);
+  const conditionFilters = activeFilters.value.filter(
+    (filter) => !isCharacterTypeFilter(filter),
+  );
+  const matchesCharacterGroup =
+    characterFilters.length === 0 ||
+    characterFilters.some((filter) => rowMatchesFilter(row, filter));
+  const matchesConditionGroup =
+    conditionFilters.length === 0 ||
+    conditionFilters.some((filter) => rowMatchesFilter(row, filter));
+
+  if (filterJoinMode.value === "and") {
+    return matchesCharacterGroup && matchesConditionGroup;
+  }
+
+  return (
+    (characterFilters.length > 0 && matchesCharacterGroup) ||
+    (conditionFilters.length > 0 && matchesConditionGroup)
+  );
 }
 
 function rowMatchesFilter(row: EncodingRow, filter: EncodingFilter) {
@@ -4932,6 +5074,7 @@ function refreshDefaultCheckMessages() {
         v-model:search-text="searchText"
         v-model:is-case-sensitive-search="isCaseSensitiveSearch"
         v-model:selected-search-columns="selectedSearchColumns"
+        v-model:filter-join-mode="filterJoinMode"
         v-model:row-filter-start="rowFilterStart"
         v-model:row-filter-end="rowFilterEnd"
         v-model:go-to-row-value="goToRowValue"
@@ -4975,6 +5118,7 @@ function refreshDefaultCheckMessages() {
           v-model:search-text="searchText"
           v-model:is-case-sensitive-search="isCaseSensitiveSearch"
           v-model:selected-search-columns="selectedSearchColumns"
+          v-model:filter-join-mode="filterJoinMode"
           v-model:row-filter-start="rowFilterStart"
           v-model:row-filter-end="rowFilterEnd"
           v-model:go-to-row-value="goToRowValue"
@@ -5929,6 +6073,29 @@ button {
   border-color: var(--primary);
   color: var(--on-accent);
   background: var(--primary);
+}
+
+.encoding-shell .stat-join-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid var(--control-border);
+  border-radius: 6px;
+  padding: 2px 5px;
+  color: var(--text-soft);
+  background: var(--table-header-bg);
+  font-size: 11px;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.encoding-shell .stat-join-control select {
+  min-height: 20px;
+  border: 0;
+  padding: 0 16px 0 2px;
+  color: var(--text);
+  background: transparent;
+  font-size: 11px;
 }
 
 .encoding-shell .go-to-row,
