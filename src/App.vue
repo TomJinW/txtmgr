@@ -6526,8 +6526,8 @@ button {
 
 .app-shell::-webkit-scrollbar,
 .app-shell *::-webkit-scrollbar {
-  width: 16px;
-  height: 16px;
+  width: 24px;
+  height: 24px;
 }
 
 .app-shell::-webkit-scrollbar-track,
