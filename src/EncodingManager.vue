@@ -5651,8 +5651,8 @@ button {
 
 .encoding-shell::-webkit-scrollbar,
 .encoding-shell *::-webkit-scrollbar {
-  width: 12px;
-  height: 12px;
+  width: 16px;
+  height: 16px;
 }
 
 .encoding-shell::-webkit-scrollbar-track,
@@ -5662,7 +5662,7 @@ button {
 
 .encoding-shell::-webkit-scrollbar-thumb,
 .encoding-shell *::-webkit-scrollbar-thumb {
-  border: 3px solid var(--scrollbar-track);
+  border: 4px solid var(--scrollbar-track);
   border-radius: 999px;
   background: var(--scrollbar-thumb);
 }
