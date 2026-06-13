@@ -6495,6 +6495,9 @@ button {
   --panel-bg: #ffffff;
   --primary: #2563eb;
   --primary-hover: #1d4ed8;
+  --scrollbar-thumb: #cbd5e1;
+  --scrollbar-thumb-hover: #94a3b8;
+  --scrollbar-track: #f8fafc;
   --success: #22c55e;
   --success-hover: #16a34a;
   --text: #202124;
@@ -6511,6 +6514,42 @@ button {
   padding: 10px;
   color: var(--text);
   background: var(--page-bg);
+  color-scheme: light;
+  scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
+}
+
+.app-shell,
+.app-shell * {
+  scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
+  scrollbar-width: thin;
+}
+
+.app-shell::-webkit-scrollbar,
+.app-shell *::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+}
+
+.app-shell::-webkit-scrollbar-track,
+.app-shell *::-webkit-scrollbar-track {
+  background: var(--scrollbar-track);
+}
+
+.app-shell::-webkit-scrollbar-thumb,
+.app-shell *::-webkit-scrollbar-thumb {
+  border: 3px solid var(--scrollbar-track);
+  border-radius: 999px;
+  background: var(--scrollbar-thumb);
+}
+
+.app-shell::-webkit-scrollbar-thumb:hover,
+.app-shell *::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover);
+}
+
+.app-shell::-webkit-scrollbar-corner,
+.app-shell *::-webkit-scrollbar-corner {
+  background: var(--scrollbar-track);
 }
 
 .app-shell.top-panel-hidden {
@@ -6663,6 +6702,9 @@ button {
   --panel-bg: #111827;
   --primary: #3b82f6;
   --primary-hover: #2563eb;
+  --scrollbar-thumb: #475569;
+  --scrollbar-thumb-hover: #64748b;
+  --scrollbar-track: #0f172a;
   --success: #16a34a;
   --success-hover: #15803d;
   --text: #e5edf6;
@@ -6671,6 +6713,7 @@ button {
   --warning-border: #c2410c;
   --warning-hover: #ea580c;
   --warning-text: #fed7aa;
+  color-scheme: dark;
 }
 
 .platform-linux.theme-dark select,
