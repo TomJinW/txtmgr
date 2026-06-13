@@ -28,6 +28,8 @@ struct ReasonContext {
 struct WindowsSleepPreventionHandle(WindowsHandle);
 
 #[cfg(target_os = "windows")]
+// The raw Windows handle is owned by this guard and cleared in Drop when the
+// frontend disables sleep prevention or the process exits.
 unsafe impl Send for WindowsSleepPreventionHandle {}
 #[cfg(target_os = "windows")]
 unsafe impl Sync for WindowsSleepPreventionHandle {}
@@ -131,6 +133,8 @@ const ENCODING_CHARACTER_STATS_MENU_ID: &str = "encoding_character_stats";
 const ENCODING_UNMAPPED_CHARACTERS_MENU_ID: &str = "encoding_unmapped_characters";
 const ENCODING_UNUSED_ENCODINGS_MENU_ID: &str = "encoding_unused_encodings";
 const ENCODING_LINE_LENGTH_MENU_ID: &str = "encoding_line_length";
+const ENCODING_TEXT_BYTE_USAGE_MENU_ID: &str = "encoding_text_byte_usage";
+const ENCODING_TEXT_BYTE_SETTINGS_MENU_ID: &str = "encoding_text_byte_settings";
 const ENCODING_GO_TO_ROW_MENU_ID: &str = "encoding_go_to_row";
 const ENCODING_PREVIOUS_SELECTED_ROW_MENU_ID: &str = "encoding_previous_selected_row";
 const ENCODING_NEXT_SELECTED_ROW_MENU_ID: &str = "encoding_next_selected_row";
@@ -141,6 +145,7 @@ const ENCODING_DELETE_SELECTED_MENU_ID: &str = "encoding_delete_selected";
 const ENCODING_COPY_SELECTED_MENU_ID: &str = "encoding_copy_selected";
 const ENCODING_SELECT_ALL_FILTERED_MENU_ID: &str = "encoding_select_all_filtered";
 const ENCODING_DESELECT_ALL_ROWS_MENU_ID: &str = "encoding_deselect_all_rows";
+const ENCODING_BULK_CHANGE_STATE_MENU_ID: &str = "encoding_bulk_change_state";
 const ENCODING_BULK_CHANGE_COLUMN_MENU_ID: &str = "encoding_bulk_change_column";
 const ENCODING_CODE_SHIFT_MENU_ID: &str = "encoding_code_shift";
 const ENCODING_INSERT_ROWS_MENU_ID: &str = "encoding_insert_rows";
@@ -204,6 +209,9 @@ struct ChatCompletionMessage {
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 struct SentenceCoverageRow {
     index: usize,
+    #[serde(default)]
+    original_text: String,
+    #[serde(default)]
     translated_text: String,
 }
 
@@ -521,6 +529,8 @@ async fn test_llm_connection(
 async fn translate_with_llm(
     request: LlmTranslationRequest,
 ) -> Result<LlmTranslationResult, String> {
+    // Keep the transport OpenAI-compatible. Provider-specific options belong in
+    // extra_request_json so local servers can still pass custom fields through.
     let base_url = request.settings.base_url.trim().trim_end_matches('/');
     if base_url.is_empty() {
         return Err("Base URL is required.".to_string());
@@ -1300,6 +1310,20 @@ fn menu_label(language: &str, key: &str) -> &'static str {
                 "Line Length Check..."
             }
         }
+        "text_byte_usage" => {
+            if zh {
+                "文本字节占用..."
+            } else {
+                "Text Byte Usage..."
+            }
+        }
+        "text_byte_settings" => {
+            if zh {
+                "文本字节统计设置..."
+            } else {
+                "Text Byte Settings..."
+            }
+        }
         "column_title_addr" => "title_addr",
         "column_original_text" => "original_text",
         "column_translated_text" => "translated_text",
@@ -1457,6 +1481,13 @@ fn build_encoding_menu_for<R: Runtime>(
     .accelerator(shortcut_accelerator(ENCODING_DESELECT_ALL_ROWS_MENU_ID))
     .build(app)?;
 
+    let bulk_change_state = MenuItemBuilder::with_id(
+        ENCODING_BULK_CHANGE_STATE_MENU_ID,
+        menu_label(language, "bulk_state"),
+    )
+    .accelerator(shortcut_accelerator(ENCODING_BULK_CHANGE_STATE_MENU_ID))
+    .build(app)?;
+
     let bulk_change_column = MenuItemBuilder::with_id(
         ENCODING_BULK_CHANGE_COLUMN_MENU_ID,
         menu_label(language, "bulk_column"),
@@ -1504,6 +1535,20 @@ fn build_encoding_menu_for<R: Runtime>(
         menu_label(language, "line_length"),
     )
     .accelerator(shortcut_accelerator(ENCODING_LINE_LENGTH_MENU_ID))
+    .build(app)?;
+
+    let text_byte_usage = MenuItemBuilder::with_id(
+        ENCODING_TEXT_BYTE_USAGE_MENU_ID,
+        menu_label(language, "text_byte_usage"),
+    )
+    .accelerator(shortcut_accelerator(ENCODING_TEXT_BYTE_USAGE_MENU_ID))
+    .build(app)?;
+
+    let text_byte_settings = MenuItemBuilder::with_id(
+        ENCODING_TEXT_BYTE_SETTINGS_MENU_ID,
+        menu_label(language, "text_byte_settings"),
+    )
+    .accelerator(shortcut_accelerator(ENCODING_TEXT_BYTE_SETTINGS_MENU_ID))
     .build(app)?;
 
     let language_dialog = MenuItemBuilder::with_id(
@@ -1578,6 +1623,7 @@ fn build_encoding_menu_for<R: Runtime>(
         .item(&deselect_all)
         .item(&copy_selected)
         .item(&insert_rows)
+        .item(&bulk_change_state)
         .item(&bulk_change_column)
         .item(&tools_separator_2)
         .item(&clear_list)
@@ -1600,6 +1646,8 @@ fn build_encoding_menu_for<R: Runtime>(
         .item(&unmapped_characters)
         .item(&unused_encodings)
         .item(&line_length)
+        .item(&text_byte_usage)
+        .item(&text_byte_settings)
         .build()?;
 
     let menu = Menu::default(app)?;
@@ -2040,6 +2088,9 @@ fn emit_encoding_menu_event<R: Runtime>(app: &AppHandle<R>, menu_id: &str) {
         ENCODING_DESELECT_ALL_ROWS_MENU_ID => {
             let _ = app.emit_to("encoding", "encoding-deselect-all-rows", ());
         }
+        ENCODING_BULK_CHANGE_STATE_MENU_ID => {
+            let _ = app.emit_to("encoding", "encoding-bulk-change-state", ());
+        }
         ENCODING_BULK_CHANGE_COLUMN_MENU_ID => {
             let _ = app.emit_to("encoding", "encoding-bulk-change-column", ());
         }
@@ -2060,6 +2111,12 @@ fn emit_encoding_menu_event<R: Runtime>(app: &AppHandle<R>, menu_id: &str) {
         }
         ENCODING_LINE_LENGTH_MENU_ID => {
             let _ = app.emit_to("encoding", "encoding-open-line-length", ());
+        }
+        ENCODING_TEXT_BYTE_USAGE_MENU_ID => {
+            let _ = app.emit_to("encoding", "encoding-open-text-byte-usage", ());
+        }
+        ENCODING_TEXT_BYTE_SETTINGS_MENU_ID => {
+            let _ = app.emit_to("encoding", "encoding-open-text-byte-settings", ());
         }
         ENCODING_OPEN_LANGUAGE_DIALOG_MENU_ID => {
             let _ = app.emit_to("encoding", "open-encoding-language-dialog", ());
@@ -2320,6 +2377,7 @@ pub fn run() {
                             | ENCODING_REDO_TABLE_CHANGE_MENU_ID
                             | ENCODING_SELECT_ALL_FILTERED_MENU_ID
                             | ENCODING_DESELECT_ALL_ROWS_MENU_ID
+                            | ENCODING_BULK_CHANGE_STATE_MENU_ID
                             | ENCODING_BULK_CHANGE_COLUMN_MENU_ID
                             | ENCODING_CODE_SHIFT_MENU_ID
                             | ENCODING_INSERT_ROWS_MENU_ID
@@ -2327,6 +2385,8 @@ pub fn run() {
                             | ENCODING_UNMAPPED_CHARACTERS_MENU_ID
                             | ENCODING_UNUSED_ENCODINGS_MENU_ID
                             | ENCODING_LINE_LENGTH_MENU_ID
+                            | ENCODING_TEXT_BYTE_USAGE_MENU_ID
+                            | ENCODING_TEXT_BYTE_SETTINGS_MENU_ID
                             | ENCODING_OPEN_LANGUAGE_DIALOG_MENU_ID
                             | ENCODING_LANGUAGE_EN_MENU_ID
                             | ENCODING_LANGUAGE_ZH_HANS_MENU_ID => {

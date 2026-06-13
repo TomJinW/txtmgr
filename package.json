@@ -11,6 +11,7 @@
     "tauri:build:exe": "tauri build --no-bundle",
     "tauri:build:exe:win-x64": "tauri build --no-bundle --target x86_64-pc-windows-msvc",
     "tauri:build:exe:win-arm64": "tauri build --no-bundle --target aarch64-pc-windows-msvc",
+    "tauri:build:linux": "tauri build --config src-tauri/tauri.linux.conf.json",
     "tauri:build:mac-universal": "PATH=\"$HOME/.cargo/bin:$PATH\" tauri build --runner \"$HOME/.cargo/bin/cargo\" --target universal-apple-darwin"
   },
   "dependencies": {

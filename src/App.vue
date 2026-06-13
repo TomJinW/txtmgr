@@ -259,7 +259,7 @@ const rowHeights = ref<Record<number, number>>({});
 const selectedSearchColumns = ref<TextSearchKey[]>(
   textSearchColumns.map((column) => column.key),
 );
-type MainTableCellColumn = Exclude<keyof SentenceRow, "state">;
+type MainTableCellColumn = keyof SentenceRow;
 type TableInteractionMode = "edit" | "select";
 type MainTableCell = { columnKey: MainTableCellColumn; rowIndex: number };
 const tableInteractionMode = ref<TableInteractionMode>("edit");
@@ -465,6 +465,8 @@ const availableFindReplaceColumns = computed<FindReplaceColumn[]>(() => {
   return textSearchColumns.filter((column) => visibleKeys.has(column.key));
 });
 
+// Find/replace follows spreadsheet expectations: it searches only the currently
+// filtered table view, and optional row/cell scopes further narrow that view.
 const findReplaceMatches = computed<FindReplaceMatch[]>(() => {
   const query = findReplaceQuery.value;
   if (query === "" || findReplaceColumns.value.length === 0) return [];
@@ -507,7 +509,7 @@ const currentFindReplaceMatch = computed(
 
 const selectableTableColumns = computed(() =>
   displayedColumns.value
-    .filter((column) => column.key !== "row_number" && column.key !== "state")
+    .filter((column) => column.key !== "row_number")
     .map((column) => column.key as MainTableCellColumn),
 );
 
@@ -1036,6 +1038,7 @@ function handleWindowsMenuShortcut(event: KeyboardEvent) {
     { action: "import_srt", run: () => void openSrtImportDialog() },
     { action: "export_srt", run: () => void openSrtExportDialog() },
     { action: "toggle_main_top_panel", run: () => toggleTopPanel() },
+    { action: "open_search_panel", run: () => openSearchOverlay() },
     { action: "open_find_replace", run: () => toggleFindReplaceBar() },
     { action: "open_language_dialog", run: () => openLanguageDialog() },
     {
@@ -1718,6 +1721,8 @@ function applySelectedAiTranslationResultsWithOptions() {
   const result = aiTranslationSession.value;
   if (!result || selectedAiTranslationTaskIds.value.size === 0) return;
 
+  // Apply uses a cloned row array so the review buffer can be updated together
+  // with one undoable table snapshot.
   const selectedIds = selectedAiTranslationTaskIds.value;
   const historySnapshot = createTableSnapshot();
   const nextRows = rows.value.map((row) => ({ ...row }));
@@ -1923,7 +1928,6 @@ async function translateWithAi() {
       aiTranslationMessage.value = useFakeTranslation
         ? `${t("ai.fakeTranslatingRow")} ${task.rowIndex + 1}...`
         : `${t("ai.translatingRow")} ${task.rowIndex + 1}...`;
-      // aiTranslationFinishedPreview.value = "";
       await nextTick();
 
       const translatedTask = useFakeTranslation
@@ -2101,6 +2105,8 @@ async function readAiTranslationAttachmentText() {
 function buildAiTranslationPrompt(task: AiTranslationTask, attachmentText = "") {
   const settings = aiTranslationSettings.value;
   const row = rows.value[task.rowIndex];
+  // Every data column is exposed as a {placeholder}. Unknown placeholders are
+  // intentionally left intact so prompt templates can be forward-compatible.
   const replacements: Record<string, string> = {
     attachment_text: attachmentText,
     nearby_rows: nearbyRowsForPrompt(task.rowIndex),
@@ -2445,10 +2451,6 @@ function redoTableChange() {
   statusMessage.value = t("message.redidTableChange");
 }
 
-function beginTableEdit() {
-  pendingEditSnapshot ??= createTableSnapshot();
-}
-
 function commitTableEdit() {
   if (!pendingEditSnapshot) return;
 
@@ -2459,6 +2461,17 @@ function commitTableEdit() {
 function commitSelectEdit() {
   markStatSnapshotDirty();
   commitTableEdit();
+}
+
+function handleTableSelectFocus(
+  rowIndex: number,
+  columnKey: MainTableCellColumn,
+  event: FocusEvent,
+) {
+  if (tableInteractionMode.value !== "select" || isTableCellEditing(rowIndex, columnKey)) {
+    pendingEditSnapshot ??= createTableSnapshot();
+  }
+  handleTableTextareaFocus(rowIndex, columnKey, event);
 }
 
 async function saveJsonFile() {
@@ -2614,9 +2627,8 @@ async function rowsFromExcelImport() {
       const titleAddr = titleColumn ? excelCellText(cells, titleColumn) : "";
       const note = noteColumn ? excelCellText(cells, noteColumn) : "";
       const aiOutput = aiOutputColumn ? excelCellText(cells, aiOutputColumn) : "";
-      const state = stateColumn
-        ? normalizeState(excelCellText(cells, stateColumn))
-        : "❓unmarked";
+      const rawState = stateColumn ? excelCellText(cells, stateColumn) : "";
+      const state = stateColumn ? normalizeState(rawState) : "❓unmarked";
       const importedFileName =
         excelImportFileNameMode.value === "sheet"
           ? sheet.name
@@ -2630,6 +2642,7 @@ async function rowsFromExcelImport() {
         translatedText === "" &&
         note === "" &&
         aiOutput === "" &&
+        rawState === "" &&
         importedFileName === ""
       ) {
         continue;
@@ -2802,6 +2815,8 @@ async function confirmSrtExport() {
 }
 
 function rowsForSrtExport() {
+  // All export dialogs share the same three scopes so filtered/selected output
+  // behaves consistently across JSON-adjacent formats.
   if (srtExportScope.value === "filtered") {
     return filteredRows.value.map(({ row }) => row);
   }
@@ -2928,6 +2943,8 @@ async function confirmExcelExport() {
 }
 
 function rowsForExcelExport() {
+  // Preserve the original zero-based row index for optional row-number export;
+  // filtered output should still show the source table row number.
   if (exportScope.value === "filtered") {
     return filteredRows.value.map(({ row, index }) => ({ row, index }));
   }
@@ -2985,8 +3002,11 @@ function originalCharacterCount(value: string) {
 }
 
 function persistSentenceCoverageSource() {
+  // Encoding Manager runs in another WebView and cannot read this Vue state
+  // directly, so publish the smallest text shape it needs for checks.
   const rowForCoverage = (row: SentenceRow, index: number) => ({
     index,
+    original_text: row.original_text,
     translated_text: row.translated_text,
   });
 
@@ -3045,9 +3065,12 @@ async function runCharacterStats() {
       return charA.localeCompare(charB);
     });
 
-    characterStatsResult.value = sortedRows
-      .map(([character, count]) => `${displayCharacterStatsToken(character)}\t${count}`)
-      .join("\n");
+    characterStatsResult.value = [
+      statsTsvRow(["character", "count"]),
+      ...sortedRows.map(([character, count]) =>
+        statsTsvRow([displayCharacterStatsToken(character), count]),
+      ),
+    ].join("\n");
 
     characterStatsMessage.value =
       sortedRows.length === 0
@@ -3167,6 +3190,17 @@ function displayCharacterStatsToken(token: string) {
   if (token === "\r") return "\\r";
   if (token === "\n") return "\\n";
   return token;
+}
+
+function statsTsvCell(value: string | number) {
+  return String(value)
+    .replace(/\r/g, "\\r")
+    .replace(/\n/g, "\\n")
+    .replace(/\t/g, "\\t");
+}
+
+function statsTsvRow(values: Array<string | number>) {
+  return values.map(statsTsvCell).join("\t");
 }
 
 async function copyCharacterStatsResult() {
@@ -3359,11 +3393,9 @@ async function pasteClipboardAsTable() {
   const table = parseClipboardTable(text);
 
   const pasteColumns = displayedColumns.value
-    .filter((column) => column.key !== "row_number" && column.key !== "state")
-    .map((column) => column.key as Exclude<keyof SentenceRow, "state">);
-  const startColumnIndex = pasteColumns.indexOf(
-    target.columnKey as Exclude<keyof SentenceRow, "state">,
-  );
+    .filter((column) => column.key !== "row_number")
+    .map((column) => column.key as keyof SentenceRow);
+  const startColumnIndex = pasteColumns.indexOf(target.columnKey);
   if (startColumnIndex === -1) {
     statusMessage.value = t("message.noPasteTarget");
     errorMessage.value = "";
@@ -3379,6 +3411,7 @@ async function pasteClipboardAsTable() {
   }
 
   let changedCount = 0;
+  let unrecognizedStateCount = 0;
   table.forEach((pasteRow, pasteRowOffset) => {
     const targetRow = rows.value[target.rowIndex + pasteRowOffset];
     if (!targetRow) return;
@@ -3386,14 +3419,26 @@ async function pasteClipboardAsTable() {
     pasteRow.forEach((value, pasteColumnOffset) => {
       const targetColumn = pasteColumns[startColumnIndex + pasteColumnOffset];
       if (!targetColumn) return;
-      targetRow[targetColumn] = value;
+      if (targetColumn === "state") {
+        const parsedState = parseStateForPaste(value);
+        if (!parsedState) {
+          unrecognizedStateCount += 1;
+          return;
+        }
+        targetRow.state = parsedState;
+      } else {
+        targetRow[targetColumn] = value;
+      }
       changedCount += 1;
     });
   });
 
   rows.value = [...rows.value];
   markStatSnapshotDirty();
-  statusMessage.value = `${t("message.pastedCells")}: ${changedCount}.`;
+  statusMessage.value =
+    unrecognizedStateCount > 0
+      ? `${t("message.pastedCells")}: ${changedCount}. ${t("message.unrecognizedPastedStates")}: ${unrecognizedStateCount}.`
+      : `${t("message.pastedCells")}: ${changedCount}.`;
   errorMessage.value = "";
 }
 
@@ -3499,6 +3544,8 @@ function focusPasteCell(rowIndex: number, columnKey: keyof SentenceRow) {
   focusedPasteCell.value = { columnKey, rowIndex };
 }
 
+// Table selection mode uses real focus only for keyboard capture. Text inputs
+// keep their native editing shortcuts until the user explicitly enters cell edit.
 function editableEventTarget(target: EventTarget | null) {
   const element = target as HTMLElement | null;
   return Boolean(element?.closest("input, textarea, select"));
@@ -3576,6 +3623,8 @@ function tableCellRange(anchor: MainTableCell, cell: MainTableCell) {
   const cellColumnIndex = columns.indexOf(cell.columnKey);
   if (anchorColumnIndex === -1 || cellColumnIndex === -1) return new Set<string>();
 
+  // Range selection follows filtered row order, not raw array order, so hidden
+  // rows are never accidentally selected.
   const fromColumn = Math.min(anchorColumnIndex, cellColumnIndex);
   const toColumn = Math.max(anchorColumnIndex, cellColumnIndex);
   const nextSelection = new Set<string>();
@@ -3728,20 +3777,20 @@ function enterTableCellEdit(cell: MainTableCell) {
   activeTableCell.value = cell;
   focusedPasteCell.value = cell;
   nextTick(() => {
-    const selector = `.textarea-cell[data-cell-row-index="${cell.rowIndex}"][data-cell-column="${cell.columnKey}"] textarea`;
-    const textarea = tableWrap.value?.querySelector<HTMLTextAreaElement>(selector);
-    textarea?.focus();
-    textarea?.select();
+    const selector = `.textarea-cell[data-cell-row-index="${cell.rowIndex}"][data-cell-column="${cell.columnKey}"] textarea, .select-cell[data-cell-row-index="${cell.rowIndex}"][data-cell-column="${cell.columnKey}"] select`;
+    const input = tableWrap.value?.querySelector<HTMLTextAreaElement | HTMLSelectElement>(selector);
+    input?.focus();
+    if (input instanceof HTMLTextAreaElement) input.select();
   });
 }
 
 function exitTableCellEdit(blurTextarea = true) {
   const editingCell = editingTableCell.value;
   if (blurTextarea && editingCell) {
-    const selector = `.textarea-cell[data-cell-row-index="${editingCell.rowIndex}"][data-cell-column="${editingCell.columnKey}"] textarea`;
-    const textarea = tableWrap.value?.querySelector<HTMLTextAreaElement>(selector);
-    if (textarea && document.activeElement === textarea) {
-      textarea.blur();
+    const selector = `.textarea-cell[data-cell-row-index="${editingCell.rowIndex}"][data-cell-column="${editingCell.columnKey}"] textarea, .select-cell[data-cell-row-index="${editingCell.rowIndex}"][data-cell-column="${editingCell.columnKey}"] select`;
+    const input = tableWrap.value?.querySelector<HTMLTextAreaElement | HTMLSelectElement>(selector);
+    if (input && document.activeElement === input) {
+      input.blur();
     }
   }
   editingTableCell.value = null;
@@ -3785,6 +3834,8 @@ function clearTableCellSelection() {
 }
 
 function syncRowSelectionFromTableCells() {
+  // Row-oriented commands still operate on selectedRowIds. In cell mode, any
+  // selected cell makes its row selected for those existing commands.
   const nextSelectedIds = new Set<number>();
   selectedTableCellList().forEach((cell) => {
     const row = rows.value[cell.rowIndex];
@@ -3810,6 +3861,8 @@ function runTableCellDragAutoScroll() {
   tableCellAutoScrollFrame = undefined;
   if (!isDraggingTableCellSelection.value || !tableWrap.value) return;
 
+  // Pointer drag can leave the currently mounted virtual rows. Auto-scroll keeps
+  // extending the selection by rechecking the cell under the pointer each frame.
   const bounds = tableWrap.value.getBoundingClientRect();
   const edgeSize = 56;
   const topDistance = tableCellDragPointerY - bounds.top;
@@ -3842,7 +3895,9 @@ function updateTableCellDragSelectionFromPointer() {
   if (!tableCellSelectionAnchor.value) return;
   const element = document
     .elementFromPoint(tableCellDragPointerX, tableCellDragPointerY)
-    ?.closest<HTMLElement>(".textarea-cell[data-cell-row-index][data-cell-column]");
+    ?.closest<HTMLElement>(
+      ".textarea-cell[data-cell-row-index][data-cell-column], .select-cell[data-cell-row-index][data-cell-column]",
+    );
   if (!element) return;
   const rowIndex = Number.parseInt(element.dataset.cellRowIndex ?? "", 10);
   const columnKey = element.dataset.cellColumn as MainTableCellColumn | undefined;
@@ -3899,13 +3954,20 @@ function clearSelectedTableCells() {
   const cells = selectedTableCellList();
   if (cells.length === 0) return;
 
-  const changedCells = cells.filter((cell) => rows.value[cell.rowIndex][cell.columnKey] !== "");
+  const changedCells = cells.filter(
+    (cell) => rows.value[cell.rowIndex][cell.columnKey] !== emptySentenceCellValue(cell.columnKey),
+  );
   if (changedCells.length === 0) return;
 
   recordCurrentStateForUndo();
   pendingEditSnapshot = null;
   changedCells.forEach((cell) => {
-    rows.value[cell.rowIndex][cell.columnKey] = "";
+    const row = rows.value[cell.rowIndex];
+    if (cell.columnKey === "state") {
+      row.state = "❓unmarked";
+    } else {
+      row[cell.columnKey] = "";
+    }
   });
   rows.value = [...rows.value];
   markStatSnapshotDirty();
@@ -4457,6 +4519,8 @@ async function scrollToFilteredRowWithMeasurement(filteredIndex: number) {
   const target = filteredRows.value[filteredIndex];
   if (!target) return;
 
+  // Row heights start as estimates. Repeat after paint until the virtualized row
+  // is mounted, then align against its measured DOM position.
   for (let attempt = 0; attempt < 4; attempt += 1) {
     const nextScrollTop = sumRowHeights(filteredRows.value, 0, filteredIndex);
     tableScrollTop.value = nextScrollTop;
@@ -4770,6 +4834,23 @@ function normalizeState(value: unknown): StateValue {
   );
 
   return plainState ?? "❓unmarked";
+}
+
+function stateMatchKey(value: string) {
+  const lettersAndNumbers = Array.from(value.normalize("NFKD"))
+    .filter((character) => /[\p{Letter}\p{Number}]/u.test(character))
+    .join("");
+  return lettersAndNumbers.replace(/^\d+(?=\p{Letter})/u, "").toLocaleLowerCase();
+}
+
+function parseStateForPaste(value: string): StateValue | null {
+  const key = stateMatchKey(value.trim());
+  if (key === "") return null;
+  return stateOptions.find((state) => stateMatchKey(state) === key) ?? null;
+}
+
+function emptySentenceCellValue(columnKey: keyof SentenceRow): StateValue | "" {
+  return columnKey === "state" ? "❓unmarked" : "";
 }
 
 function serializeRows() {
@@ -5230,7 +5311,7 @@ function finishColumnReorder(event: PointerEvent) {
 
 function selectVisibleTableColumn(columnKey: ColumnKey, extendSelection = false) {
   if (tableInteractionMode.value !== "select") return;
-  if (columnKey === "row_number" || columnKey === "state") return;
+  if (columnKey === "row_number") return;
 
   const selectableColumn = columnKey as MainTableCellColumn;
   if (!selectableTableColumns.value.includes(selectableColumn)) return;
@@ -5956,7 +6037,24 @@ function startResize(columnIndex: number, event: PointerEvent) {
             class="header-content"
             @pointerdown="startColumnReorder(column.key, $event)"
           >
-            <span class="header-label">{{ column.label }}</span>
+            <span
+              class="header-label"
+              :title="
+                column.key === 'row_number'
+                  ? `${t('common.selected')}: ${selectedRowCount}`
+                  : column.label
+              "
+              :aria-label="
+                column.key === 'row_number'
+                  ? `${column.label}, ${t('common.selected')}: ${selectedRowCount}`
+                  : column.label
+              "
+            >
+              {{ column.label }}
+              <template v-if="column.key === 'row_number' && selectedRowCount > 0">
+                · {{ selectedRowCount }}
+              </template>
+            </span>
             <div v-if="column.key === 'row_number'" class="header-row-actions">
               <input
                 class="row-select-checkbox"
@@ -6138,15 +6236,31 @@ function startResize(columnIndex: number, event: PointerEvent) {
             <div
               v-else-if="column.key === 'state'"
               class="select-cell"
+              :class="{
+                'find-current-cell': isCurrentFindReplaceCell(row, column.key),
+                'table-cell-selected': isTableCellSelected(rowIndex, column.key),
+                'table-cell-active': isActiveTableCell(rowIndex, column.key),
+                'table-cell-editing': isTableCellEditing(rowIndex, column.key),
+              }"
+              :data-cell-column="column.key"
+              :data-cell-row-index="rowIndex"
               :style="columnFontStyle(columnIndexByKey(column.key))"
+              @mousedown="handleTableCellMouseDown(rowIndex, column.key, $event)"
+              @mousemove="handleTableCellMouseMove(rowIndex, column.key, $event)"
+              @dblclick="handleTableCellDoubleClick(rowIndex, column.key, $event)"
             >
               <select
                 v-model="row.state"
                 aria-label="state"
-                :disabled="tableInteractionMode === 'select'"
-                @focus="beginTableEdit"
+                :disabled="tableInteractionMode === 'select' && !isTableCellEditing(rowIndex, column.key)"
+                :tabindex="
+                  tableInteractionMode === 'select' && !isTableCellEditing(rowIndex, column.key)
+                    ? -1
+                    : 0
+                "
+                @focus="handleTableSelectFocus(rowIndex, column.key, $event)"
                 @change="commitSelectEdit"
-                @blur="commitTableEdit"
+                @blur="handleTableTextareaBlur"
               >
                 <option v-for="state in stateOptions" :key="state" :value="state">
                   {{ state }}
@@ -7578,46 +7692,56 @@ button {
   border-right-color: transparent;
 }
 
-.textarea-cell.find-current-cell {
+.textarea-cell.find-current-cell,
+.select-cell.find-current-cell {
   outline: 2px solid var(--warning);
   outline-offset: -2px;
   background: var(--warning-bg);
 }
 
-.textarea-cell.table-cell-selected {
+.textarea-cell.table-cell-selected,
+.select-cell.table-cell-selected {
   background: color-mix(in srgb, var(--primary) 18%, var(--panel-bg));
 }
 
-.textarea-cell.table-cell-active {
+.textarea-cell.table-cell-active,
+.select-cell.table-cell-active {
   outline: 2px solid var(--primary);
   outline-offset: -2px;
 }
 
-.textarea-cell.table-cell-editing {
+.textarea-cell.table-cell-editing,
+.select-cell.table-cell-editing {
   outline: 2px solid var(--success);
   outline-offset: -2px;
   background: color-mix(in srgb, var(--success) 14%, var(--panel-bg));
 }
 
-.table-select-mode .textarea-cell {
+.table-select-mode .textarea-cell,
+.table-select-mode .select-cell {
   cursor: cell;
   user-select: none;
   -webkit-user-select: none;
 }
 
-.table-select-mode .textarea-cell > textarea {
+.table-select-mode .textarea-cell > textarea,
+.table-select-mode .select-cell > select {
   cursor: cell;
+  pointer-events: none;
   user-select: none;
   -webkit-user-select: none;
 }
 
-.table-select-mode .textarea-cell.table-cell-editing > textarea {
+.table-select-mode .textarea-cell.table-cell-editing > textarea,
+.table-select-mode .select-cell.table-cell-editing > select {
   cursor: text;
+  pointer-events: auto;
   user-select: text;
   -webkit-user-select: text;
 }
 
-.table-select-mode .textarea-cell.table-cell-editing > textarea:focus {
+.table-select-mode .textarea-cell.table-cell-editing > textarea:focus,
+.table-select-mode .select-cell.table-cell-editing > select:focus {
   box-shadow: inset 0 0 0 2px var(--success);
 }
 
@@ -7777,7 +7901,8 @@ button {
   box-shadow: inset 0 0 0 2px var(--primary);
 }
 
-.table-select-mode .textarea-cell.table-cell-editing > textarea:focus {
+.table-select-mode .textarea-cell.table-cell-editing > textarea:focus,
+.table-select-mode .select-cell.table-cell-editing > select:focus {
   box-shadow: inset 0 0 0 2px var(--success);
 }
 

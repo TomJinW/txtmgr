@@ -14,6 +14,7 @@ import {
   cjkFallbackOptions,
   draftStorageKey as sentenceDraftStorageKey,
   encodingExcelExportScopeStorageKey,
+  encodingStateOptions,
   encodingTextExportScopeStorageKey,
   maxHistorySteps,
 } from "./constants";
@@ -36,6 +37,7 @@ import {
 } from "./excel";
 import CharacterStatsDialog from "./components/CharacterStatsDialog.vue";
 import BulkColumnDialog, { type BulkEditableColumn } from "./components/BulkColumnDialog.vue";
+import BulkStateDialog from "./components/BulkStateDialog.vue";
 import EncodingCodeShiftDialog, {
   type CodeShiftBase,
   type CodeShiftOperation,
@@ -46,6 +48,15 @@ import EncodingLineLengthDialog, {
   type LineLengthScope,
   type LineLengthWidthRule,
 } from "./components/EncodingLineLengthDialog.vue";
+import TextByteSettingsDialog, {
+  type TextByteCharacterType,
+  type TextByteUsageSettings,
+} from "./components/TextByteSettingsDialog.vue";
+import TextByteUsageDialog, {
+  type TextByteUsageColumn,
+  type TextByteUsageOutput,
+  type TextByteUsageScope,
+} from "./components/TextByteUsageDialog.vue";
 import EncodingExcelImportDialog from "./components/EncodingExcelImportDialog.vue";
 import EncodingExcelExportDialog from "./components/EncodingExcelExportDialog.vue";
 import EncodingExportDialog from "./components/EncodingExportDialog.vue";
@@ -61,13 +72,16 @@ import LanguageDialog from "./components/LanguageDialog.vue";
 import type {
   CjkFallbackMode,
   EncodingRow,
+  EncodingStateValue,
   ExportScope,
   SentenceRow,
   StoredDraft,
   ThemeMode,
 } from "./types";
 
-type EncodingFilter =
+type EncodingStateFilter = { type: "state"; state: EncodingStateValue };
+type EncodingUsageState = Exclude<EncodingStateValue, "both">;
+type EncodingConditionFilter =
   | "duplicate_character"
   | "duplicate_code"
   | "empty_character"
@@ -78,6 +92,7 @@ type EncodingFilter =
   | "hangul"
   | "latin"
   | "special";
+type EncodingFilter = EncodingStateFilter | EncodingConditionFilter;
 
 type CoverageCharacterType =
   | "western"
@@ -94,6 +109,7 @@ type CoverageBracketTokenType = "square" | "curly" | "angle";
 
 type SentenceCoverageRow = {
   index: number;
+  original_text: string;
   translated_text: string;
 };
 
@@ -109,19 +125,22 @@ type EncodingTableSnapshot = {
 };
 
 const draftStorageKey = "txtmgr.encodingRows.v1";
-const columnWidthStorageKey = "txtmgr.encodingColumnWidths.v3";
-const columnFontSizeStorageKey = "txtmgr.encodingColumnFontSizes.v1";
+const columnWidthStorageKey = "txtmgr.encodingColumnWidths.v4";
+const columnFontSizeStorageKey = "txtmgr.encodingColumnFontSizes.v2";
 const columnOrderStorageKey = "txtmgr.encodingColumnOrder.v1";
 const fallbackStorageKey = "txtmgr.encodingFallback.v2";
+const textByteSettingsStorageKey = "txtmgr.encodingTextByteSettings.v1";
+const encodingTextExportStatesStorageKey = "txtmgr.encodingTextExportStates.v1";
+const encodingExcelExportStatesStorageKey = "txtmgr.encodingExcelExportStates.v1";
 const bulkColumnStorageKey = "txtmgr.encodingBulkColumnKey.v1";
 const topPanelVisibleStorageKey = "txtmgr.encodingTopPanelVisible.v1";
 const themeStorageKey = "txtmgr.theme.v1";
-const defaultColumnWidths = [112, 105, 112, 76, 200];
-const defaultColumnFontSizes = [10, 14, 14, 14, 14];
-const minColumnWidths = [108, 64, 72, 56, 100];
+const defaultColumnWidths = [112, 105, 112, 76, 116, 200];
+const defaultColumnFontSizes = [10, 14, 14, 14, 14, 14];
+const minColumnWidths = [108, 64, 72, 56, 90, 100];
 const estimatedRowHeight = 42;
 const virtualOverscanRows = 12;
-const filterOptions: EncodingFilter[] = [
+const filterOptions: EncodingConditionFilter[] = [
   "duplicate_character",
   "duplicate_code",
   "empty_character",
@@ -138,9 +157,23 @@ const columns = [
   { key: "original_char", label: "char" },
   { key: "code", label: "code" },
   { key: "width", label: "width" },
+  { key: "state", label: "state" },
   { key: "note", label: "note" },
 ] as const;
 type EncodingColumnKey = (typeof columns)[number]["key"];
+const encodingUsageStateOptions: EncodingUsageState[] = ["original", "translated"];
+const textByteCharacterTypes: TextByteCharacterType[] = [
+  "western",
+  "han",
+  "kana",
+  "hangul",
+  "fullwidth_letters",
+  "fullwidth",
+  "halfwidth",
+  "newline",
+  "token",
+  "other",
+];
 const searchableColumns: (keyof EncodingRow)[] = [
   "original_char",
   "code",
@@ -163,6 +196,7 @@ const isCaseSensitiveSearch = ref(false);
 const selectedSearchColumns = ref<(keyof EncodingRow)[]>([...searchableColumns]);
 const activeFilters = ref<EncodingFilter[]>([]);
 const filterJoinMode = ref<"or" | "and">("or");
+const stateFilterJoinMode = ref<"or" | "and">("and");
 const selectedRowIds = ref<Set<number>>(new Set());
 const selectionAnchorRowId = ref<number | null>(null);
 type TableInteractionMode = "edit" | "select";
@@ -188,6 +222,7 @@ const bulkEditableColumns: { key: BulkEditableColumn; label: string }[] = [
 ];
 const bulkColumnKey = ref<BulkEditableColumn>(restoreBulkColumnKey());
 const bulkColumnValue = ref("");
+const bulkStateValue = ref<EncodingStateValue>("both");
 const codeShiftColumn = ref<keyof EncodingRow>("code");
 const codeShiftOperation = ref<CodeShiftOperation>("add");
 const codeShiftBase = ref<CodeShiftBase>("hex");
@@ -210,10 +245,13 @@ const currentFindMatchIndex = ref(0);
 const isGoToRowDialogOpen = ref(false);
 const isInsertRowsDialogOpen = ref(false);
 const isBulkColumnDialogOpen = ref(false);
+const isBulkStateDialogOpen = ref(false);
 const isCodeShiftDialogOpen = ref(false);
 const isUnmappedCharactersDialogOpen = ref(false);
 const isUnusedEncodingsDialogOpen = ref(false);
 const isLineLengthDialogOpen = ref(false);
+const isTextByteSettingsDialogOpen = ref(false);
+const isTextByteUsageDialogOpen = ref(false);
 const isLanguageDialogOpen = ref(false);
 const isSearchOverlayOpen = ref(false);
 const isImportDialogOpen = ref(false);
@@ -230,12 +268,16 @@ const excelImportStartRow = ref(2);
 const excelImportCharColumn = ref("2");
 const excelImportCodeColumn = ref("3");
 const excelImportWidthColumn = ref("");
+const excelImportStateColumn = ref("");
 const excelImportNoteColumn = ref("");
 const excelImportAppendRows = ref(false);
 const isExportDialogOpen = ref(false);
 const isExportingText = ref(false);
 const exportPath = ref("");
 const exportScope = ref<ExportScope>(restoreExportScope(encodingTextExportScopeStorageKey));
+const exportStates = ref<EncodingUsageState[]>(
+  restoreEncodingUsageStates(encodingTextExportStatesStorageKey),
+);
 const exportExtension = ref<"txt" | "tbl">("txt");
 const exportDirection = ref<"code_char" | "char_code">("code_char");
 const exportNewline = ref<"crlf" | "lf">("crlf");
@@ -244,6 +286,9 @@ const isExcelExportDialogOpen = ref(false);
 const isExportingExcel = ref(false);
 const excelExportPath = ref("");
 const excelExportScope = ref<ExportScope>(restoreExportScope(encodingExcelExportScopeStorageKey));
+const excelExportStates = ref<EncodingUsageState[]>(
+  restoreEncodingUsageStates(encodingExcelExportStatesStorageKey),
+);
 const isCharacterStatsDialogOpen = ref(false);
 const characterStatsScope = ref<"all" | "filtered" | "selected">("filtered");
 const characterStatsTextScope = ref<"all" | "filtered" | "selected">("filtered");
@@ -255,6 +300,7 @@ const characterStatsBracketTokenTypes = ref<CoverageBracketTokenType[]>([
   "curly",
   "angle",
 ]);
+const characterStatsEncodingStates = ref<EncodingUsageState[]>([...encodingUsageStateOptions]);
 const characterStatsIgnoreWhitespace = ref(true);
 const isCountingCharacterStats = ref(false);
 const characterStatsProgress = ref(0);
@@ -269,6 +315,7 @@ const unmappedBracketTokenTypes = ref<CoverageBracketTokenType[]>([
   "curly",
   "angle",
 ]);
+const unmappedEncodingStates = ref<EncodingUsageState[]>([...encodingUsageStateOptions]);
 const unmappedIgnoreWhitespace = ref(true);
 const isCheckingUnmappedCharacters = ref(false);
 const unmappedProgress = ref(0);
@@ -284,6 +331,7 @@ const unusedEncodingBracketTokenTypes = ref<CoverageBracketTokenType[]>([
   "curly",
   "angle",
 ]);
+const unusedEncodingStates = ref<EncodingUsageState[]>([...encodingUsageStateOptions]);
 const unusedEncodingIgnoreWhitespace = ref(true);
 const isCheckingUnusedEncodings = ref(false);
 const unusedEncodingProgress = ref(0);
@@ -297,6 +345,8 @@ const lineLengthBracketTokenTypes = ref<LineLengthBracketTokenType[]>([
   "curly",
   "angle",
 ]);
+const lineLengthEncodingStates = ref<EncodingUsageState[]>([...encodingUsageStateOptions]);
+const lineLengthUseFixedFallback = ref(true);
 const lineLengthWidthRules = ref<Record<LineLengthCharacterType, LineLengthWidthRule>>({
   fullwidth: { fixed: 1, mode: "encoding" },
   fullwidth_letters: { fixed: 1, mode: "encoding" },
@@ -313,6 +363,26 @@ const lineLengthProgress = ref(0);
 const lineLengthResult = ref("");
 const lineLengthMessage = ref(t("message.notCheckedYet"));
 const lineLengthSourceRefreshKey = ref(0);
+const textByteOriginalSettings = ref<TextByteUsageSettings>(
+  restoreTextByteUsageSettings("original"),
+);
+const textByteTranslatedSettings = ref<TextByteUsageSettings>(
+  restoreTextByteUsageSettings("translated"),
+);
+const textByteUsageScope = ref<TextByteUsageScope>("filtered");
+const textByteUsageColumns = ref<TextByteUsageColumn[]>(["original", "translated"]);
+const textByteUsageOutputSections = ref<TextByteUsageOutput[]>([
+  "summary",
+  "failures",
+]);
+const textByteUsageCellOverBytes = ref(0);
+const textByteUsageTranslatedOverOriginalBytes = ref(0);
+const textByteUsageTranslatedOverOriginalPercent = ref(0);
+const isCheckingTextByteUsage = ref(false);
+const textByteUsageProgress = ref(0);
+const textByteUsageResult = ref("");
+const textByteUsageMessage = ref(t("message.notCheckedYet"));
+const textByteUsageSourceRefreshKey = ref(0);
 const sentenceCoverageSource = ref<SentenceCoverageSource>({
   all: [],
   filtered: [],
@@ -346,6 +416,8 @@ let unlistenEncodingOpenCharacterStats: UnlistenFn | undefined;
 let unlistenEncodingOpenUnmappedCharacters: UnlistenFn | undefined;
 let unlistenEncodingOpenUnusedEncodings: UnlistenFn | undefined;
 let unlistenEncodingOpenLineLength: UnlistenFn | undefined;
+let unlistenEncodingOpenTextByteSettings: UnlistenFn | undefined;
+let unlistenEncodingOpenTextByteUsage: UnlistenFn | undefined;
 let unlistenEncodingOpenGoToRow: UnlistenFn | undefined;
 let unlistenEncodingJumpToPreviousSelectedRow: UnlistenFn | undefined;
 let unlistenEncodingJumpToNextSelectedRow: UnlistenFn | undefined;
@@ -356,6 +428,7 @@ let unlistenEncodingUndoTableChange: UnlistenFn | undefined;
 let unlistenEncodingRedoTableChange: UnlistenFn | undefined;
 let unlistenEncodingSelectAllFiltered: UnlistenFn | undefined;
 let unlistenEncodingDeselectAllRows: UnlistenFn | undefined;
+let unlistenEncodingBulkState: UnlistenFn | undefined;
 let unlistenEncodingBulkColumn: UnlistenFn | undefined;
 let unlistenEncodingCodeShift: UnlistenFn | undefined;
 let unlistenEncodingInsertRows: UnlistenFn | undefined;
@@ -435,7 +508,7 @@ const duplicateCodeIds = computed(() => {
 const duplicateCharacterIds = computed(() => {
   const groups = new Map<string, number[]>();
   rows.value.forEach((row) => {
-    const character = row.original_char.trim();
+    const character = encodingCharacterToken(row.original_char);
     if (character === "") return;
     groups.set(character, [...(groups.get(character) ?? []), getRowIdentity(row)]);
   });
@@ -479,6 +552,8 @@ const availableFindReplaceColumns = computed<FindReplaceColumn[]>(() => {
     .map((column) => ({ key: column.key, label: column.label }));
 });
 
+// Find/replace searches the filtered view only, then narrows further when the
+// user chooses selected rows or selected cells.
 const findReplaceMatches = computed<EncodingFindReplaceMatch[]>(() => {
   const query = findReplaceQuery.value;
   if (query === "" || findReplaceColumns.value.length === 0) return [];
@@ -576,6 +651,15 @@ const textFilteredRows = computed(() => {
 });
 
 const filterCounts = ref(emptyEncodingFilterCounts());
+const encodingStateCounts = computed(() => {
+  const counts = Object.fromEntries(
+    encodingStateOptions.map((state) => [state, 0]),
+  ) as Record<EncodingStateValue, number>;
+  textFilteredRows.value.forEach(({ row }) => {
+    counts[normalizeEncodingState(row.state)] += 1;
+  });
+  return counts;
+});
 
 const filteredRowIds = computed(() =>
   filteredRows.value.map(({ row }) => getRowIdentity(row)),
@@ -598,6 +682,7 @@ const characterStatsTextRowCount = computed(() => textRowsForCharacterStats().le
 const unmappedRowCount = computed(() => sentenceRowsForUnmappedCheck().length);
 const unusedEncodingTextRowCount = computed(() => sentenceRowsForUnusedEncodingCheck().length);
 const lineLengthRowCount = computed(() => sentenceRowsForLineLengthCheck().length);
+const textByteUsageRowCount = computed(() => sentenceRowsForTextByteUsageCheck().length);
 
 const exportRowCount = computed(() =>
   rowsForTextExport().length,
@@ -626,6 +711,7 @@ function hasExcelImportColumnMapping() {
     String(excelImportCharColumn.value).trim() !== "" ||
     String(excelImportCodeColumn.value).trim() !== "" ||
     String(excelImportWidthColumn.value).trim() !== "" ||
+    String(excelImportStateColumn.value).trim() !== "" ||
     String(excelImportNoteColumn.value).trim() !== ""
   );
 }
@@ -710,6 +796,14 @@ watch(
   { deep: true },
 );
 
+watch(
+  [textByteOriginalSettings, textByteTranslatedSettings],
+  () => {
+    persistTextByteSettings();
+  },
+  { deep: true },
+);
+
 watch(themeMode, () => {
   window.localStorage.setItem(themeStorageKey, themeMode.value);
   void syncNativeChrome();
@@ -723,9 +817,25 @@ watch(exportScope, () => {
   persistExportScope(encodingTextExportScopeStorageKey, exportScope.value);
 });
 
+watch(
+  exportStates,
+  () => {
+    persistEncodingUsageStates(encodingTextExportStatesStorageKey, exportStates.value);
+  },
+  { deep: true },
+);
+
 watch(excelExportScope, () => {
   persistExportScope(encodingExcelExportScopeStorageKey, excelExportScope.value);
 });
+
+watch(
+  excelExportStates,
+  () => {
+    persistEncodingUsageStates(encodingExcelExportStatesStorageKey, excelExportStates.value);
+  },
+  { deep: true },
+);
 
 watch(isTopPanelVisible, () => {
   window.localStorage.setItem(topPanelVisibleStorageKey, String(isTopPanelVisible.value));
@@ -751,7 +861,8 @@ watch(
   () => [
     searchText.value,
     String(isCaseSensitiveSearch.value),
-    activeFilters.value.join("|"),
+    activeFilters.value.map(encodingFilterKey).join("|"),
+    stateFilterJoinMode.value,
     filterJoinMode.value,
     selectedSearchColumns.value.join("|"),
     rowFilterStart.value,
@@ -836,6 +947,8 @@ onBeforeUnmount(() => {
   unlistenEncodingOpenUnmappedCharacters?.();
   unlistenEncodingOpenUnusedEncodings?.();
   unlistenEncodingOpenLineLength?.();
+  unlistenEncodingOpenTextByteSettings?.();
+  unlistenEncodingOpenTextByteUsage?.();
   unlistenEncodingOpenGoToRow?.();
   unlistenEncodingJumpToPreviousSelectedRow?.();
   unlistenEncodingJumpToNextSelectedRow?.();
@@ -846,6 +959,7 @@ onBeforeUnmount(() => {
   unlistenEncodingRedoTableChange?.();
   unlistenEncodingSelectAllFiltered?.();
   unlistenEncodingDeselectAllRows?.();
+  unlistenEncodingBulkState?.();
   unlistenEncodingBulkColumn?.();
   unlistenEncodingCodeShift?.();
   unlistenEncodingInsertRows?.();
@@ -994,6 +1108,7 @@ function handleWindowsMenuShortcut(event: KeyboardEvent) {
     { action: "encoding_go_to_row", run: () => openGoToRowDialog() },
     { action: "encoding_previous_selected_row", run: () => void jumpToSelectedRow("previous") },
     { action: "encoding_next_selected_row", run: () => void jumpToSelectedRow("next") },
+    { action: "encoding_open_search_panel", run: () => openSearchOverlay() },
     { action: "encoding_open_find_replace", run: () => toggleFindReplaceBar() },
     { action: "encoding_clear_list", run: () => void clearRows() },
     { action: "encoding_delete_selected", run: () => void deleteSelectedRows() },
@@ -1001,6 +1116,7 @@ function handleWindowsMenuShortcut(event: KeyboardEvent) {
     { action: "encoding_select_all_filtered", run: () => selectAllFilteredRows() },
     { action: "encoding_deselect_all_rows", run: () => deselectAllRows() },
     { action: "encoding_insert_rows", run: () => openInsertRowsDialog("end") },
+    { action: "encoding_bulk_change_state", run: () => openBulkStateDialog() },
     { action: "encoding_bulk_change_column", run: () => openBulkColumnDialog() },
     { action: "encoding_code_shift", run: () => openCodeShiftDialog() },
     { action: "encoding_toggle_top_panel", run: () => toggleTopPanel() },
@@ -1008,6 +1124,8 @@ function handleWindowsMenuShortcut(event: KeyboardEvent) {
     { action: "encoding_unmapped_characters", run: () => void openUnmappedCharactersDialog() },
     { action: "encoding_unused_encodings", run: () => void openUnusedEncodingsDialog() },
     { action: "encoding_line_length", run: () => void openLineLengthDialog() },
+    { action: "encoding_text_byte_usage", run: () => void openTextByteUsageDialog() },
+    { action: "encoding_text_byte_settings", run: () => openTextByteSettingsDialog() },
     { action: "encoding_open_language_dialog", run: () => openLanguageDialog() },
     { action: "encoding_language_en", run: () => setAppLanguage("en") },
     { action: "encoding_language_zh_hans", run: () => setAppLanguage("zh-Hans") },
@@ -1212,6 +1330,16 @@ function registerMenuListeners() {
       console.warn("Failed to register encoding bulk column menu listener.", error);
     });
 
+  listen("encoding-bulk-change-state", () => {
+    openBulkStateDialog();
+  })
+    .then((unlisten) => {
+      unlistenEncodingBulkState = unlisten;
+    })
+    .catch((error) => {
+      console.warn("Failed to register encoding bulk state menu listener.", error);
+    });
+
   listen("encoding-code-shift", () => {
     openCodeShiftDialog();
   })
@@ -1302,6 +1430,26 @@ function registerMenuListeners() {
       console.warn("Failed to register encoding line length menu listener.", error);
     });
 
+  listen("encoding-open-text-byte-usage", () => {
+    void openTextByteUsageDialog();
+  })
+    .then((unlisten) => {
+      unlistenEncodingOpenTextByteUsage = unlisten;
+    })
+    .catch((error) => {
+      console.warn("Failed to register encoding text byte usage menu listener.", error);
+    });
+
+  listen("encoding-open-text-byte-settings", () => {
+    openTextByteSettingsDialog();
+  })
+    .then((unlisten) => {
+      unlistenEncodingOpenTextByteSettings = unlisten;
+    })
+    .catch((error) => {
+      console.warn("Failed to register encoding text byte settings menu listener.", error);
+    });
+
   listen<{ target?: string; language: AppLanguage }>("set-language", (event) => {
     if (event.payload?.target !== "encoding") return;
     setAppLanguage(normalizeAppLanguage(event.payload?.language));
@@ -1329,6 +1477,7 @@ function createEmptyRow(): EncodingRow {
     original_char: "",
     code: "",
     width: "",
+    state: "both",
     note: "",
   };
 }
@@ -1490,6 +1639,7 @@ async function pasteClipboardAsTable() {
   }
 
   let changedCount = 0;
+  let unrecognizedStateCount = 0;
   table.forEach((pasteRow, pasteRowOffset) => {
     const targetRow = rows.value[target.rowIndex + pasteRowOffset];
     if (!targetRow) return;
@@ -1497,13 +1647,26 @@ async function pasteClipboardAsTable() {
     pasteRow.forEach((value, pasteColumnOffset) => {
       const targetColumn = pasteColumns[startColumnIndex + pasteColumnOffset];
       if (!targetColumn) return;
-      targetRow[targetColumn] = targetColumn === "code" ? normalizeCode(value) : value;
+      if (targetColumn === "state") {
+        const parsedState = parseEncodingStateForPaste(value);
+        if (!parsedState) {
+          unrecognizedStateCount += 1;
+          return;
+        }
+        targetRow.state = parsedState;
+        changedCount += 1;
+        return;
+      }
+      setEncodingCellValue(targetRow, targetColumn, value);
       changedCount += 1;
     });
   });
 
   rows.value = [...rows.value];
-  statusMessage.value = `${t("message.pastedCells")}: ${changedCount}.`;
+  statusMessage.value =
+    unrecognizedStateCount > 0
+      ? `${t("message.pastedCells")}: ${changedCount}. ${t("message.unrecognizedPastedStates")}: ${unrecognizedStateCount}.`
+      : `${t("message.pastedCells")}: ${changedCount}.`;
   errorMessage.value = "";
 }
 
@@ -1601,6 +1764,7 @@ function serializeJsonRows() {
       char: row.original_char,
       code: normalizeCode(row.code),
       width: row.width,
+      state: normalizeEncodingState(row.state),
       note: row.note,
     })),
     null,
@@ -1630,8 +1794,28 @@ function normalizeEncodingJsonRow(item: unknown): EncodingRow {
     original_char: toText(row.char || row.original_char),
     code: normalizeCode(toText(row.code)),
     width: toText(row.width),
+    state: normalizeEncodingState(row.state),
     note: toText(row.note),
   };
+}
+
+function normalizeEncodingState(value: unknown): EncodingStateValue {
+  return encodingStateOptions.includes(value as EncodingStateValue)
+    ? (value as EncodingStateValue)
+    : "both";
+}
+
+function stateMatchKey(value: string) {
+  const lettersAndNumbers = Array.from(value.normalize("NFKD"))
+    .filter((character) => /[\p{Letter}\p{Number}]/u.test(character))
+    .join("");
+  return lettersAndNumbers.replace(/^\d+(?=\p{Letter})/u, "").toLocaleLowerCase();
+}
+
+function parseEncodingStateForPaste(value: string): EncodingStateValue | null {
+  const key = stateMatchKey(value.trim());
+  if (key === "") return null;
+  return encodingStateOptions.find((state) => stateMatchKey(state) === key) ?? null;
 }
 
 function ensureJsonExtension(path: string) {
@@ -1655,6 +1839,7 @@ async function confirmImportOverwrite(title: string) {
 }
 
 type EncodingDialog =
+  | "bulkState"
   | "bulkColumn"
   | "codeShift"
   | "characterStats"
@@ -1666,6 +1851,8 @@ type EncodingDialog =
   | "importText"
   | "language"
   | "lineLength"
+  | "textByteSettings"
+  | "textByteUsage"
   | "unmappedCharacters"
   | "unusedEncodings";
 
@@ -1691,6 +1878,9 @@ function openEncodingDialog(dialog: EncodingDialog) {
   switch (dialog) {
     case "bulkColumn":
       isBulkColumnDialogOpen.value = true;
+      break;
+    case "bulkState":
+      isBulkStateDialogOpen.value = true;
       break;
     case "codeShift":
       isCodeShiftDialogOpen.value = true;
@@ -1722,6 +1912,12 @@ function openEncodingDialog(dialog: EncodingDialog) {
     case "lineLength":
       isLineLengthDialogOpen.value = true;
       break;
+    case "textByteSettings":
+      isTextByteSettingsDialogOpen.value = true;
+      break;
+    case "textByteUsage":
+      isTextByteUsageDialogOpen.value = true;
+      break;
     case "unmappedCharacters":
       isUnmappedCharactersDialogOpen.value = true;
       break;
@@ -1735,6 +1931,7 @@ function openEncodingDialog(dialog: EncodingDialog) {
 
 function closeEncodingDialogs() {
   isBulkColumnDialogOpen.value = false;
+  isBulkStateDialogOpen.value = false;
   isCodeShiftDialogOpen.value = false;
   isCharacterStatsDialogOpen.value = false;
   isExcelExportDialogOpen.value = false;
@@ -1745,6 +1942,8 @@ function closeEncodingDialogs() {
   isImportDialogOpen.value = false;
   isLanguageDialogOpen.value = false;
   isLineLengthDialogOpen.value = false;
+  isTextByteSettingsDialogOpen.value = false;
+  isTextByteUsageDialogOpen.value = false;
   isUnmappedCharactersDialogOpen.value = false;
   isUnusedEncodingsDialogOpen.value = false;
 }
@@ -1753,6 +1952,7 @@ function hasOpenEncodingDialog() {
   return (
     isExcelExportDialogOpen.value ||
     isBulkColumnDialogOpen.value ||
+    isBulkStateDialogOpen.value ||
     isCodeShiftDialogOpen.value ||
     isCharacterStatsDialogOpen.value ||
     isExcelImportDialogOpen.value ||
@@ -1762,6 +1962,8 @@ function hasOpenEncodingDialog() {
     isImportDialogOpen.value ||
     isLanguageDialogOpen.value ||
     isLineLengthDialogOpen.value ||
+    isTextByteSettingsDialogOpen.value ||
+    isTextByteUsageDialogOpen.value ||
     isUnmappedCharactersDialogOpen.value ||
     isUnusedEncodingsDialogOpen.value
   );
@@ -1773,6 +1975,7 @@ function hasActiveEncodingDialogTask() {
     isCheckingUnusedEncodings.value ||
     isCountingCharacterStats.value ||
     isCheckingLineLength.value ||
+    isCheckingTextByteUsage.value ||
     isExportingExcel.value ||
     isExportingText.value ||
     isImportingExcel.value ||
@@ -1832,6 +2035,23 @@ function closeLineLengthDialog() {
   isLineLengthDialogOpen.value = false;
 }
 
+function openTextByteSettingsDialog() {
+  openEncodingDialog("textByteSettings");
+}
+
+function closeTextByteSettingsDialog() {
+  isTextByteSettingsDialogOpen.value = false;
+}
+
+async function openTextByteUsageDialog() {
+  if (!openEncodingDialog("textByteUsage")) return;
+  await refreshSentenceCoverageSource();
+}
+
+function closeTextByteUsageDialog() {
+  isTextByteUsageDialogOpen.value = false;
+}
+
 function sentenceRowsForUnmappedCheck() {
   void unmappedSourceRefreshKey.value;
   const source = sentenceCoverageSource.value;
@@ -1856,16 +2076,31 @@ function sentenceRowsForLineLengthCheck() {
   return source.all ?? [];
 }
 
+function sentenceRowsForTextByteUsageCheck() {
+  // Text byte checks read main-window original/translated text through the
+  // backend coverage cache, while all encoding rules come from this window.
+  void textByteUsageSourceRefreshKey.value;
+  const source = sentenceCoverageSource.value;
+  const scopedRows = source[textByteUsageScope.value];
+  if (scopedRows) return scopedRows;
+  return source.all ?? [];
+}
+
 function encodingRowsForCharacterStats() {
+  const matchesState = (row: EncodingRow) =>
+    encodingRowMatchesStates(row, characterStatsEncodingStates.value);
+
   if (characterStatsScope.value === "filtered") {
-    return filteredRows.value.map(({ row }) => row);
+    return filteredRows.value.map(({ row }) => row).filter(matchesState);
   }
 
   if (characterStatsScope.value === "selected") {
-    return rows.value.filter((row) => selectedRowIds.value.has(getRowIdentity(row)));
+    return rows.value.filter(
+      (row) => selectedRowIds.value.has(getRowIdentity(row)) && matchesState(row),
+    );
   }
 
-  return rows.value;
+  return rows.value.filter(matchesState);
 }
 
 function textRowsForCharacterStats() {
@@ -1881,6 +2116,7 @@ async function refreshSentenceCoverageSource() {
   unmappedSourceRefreshKey.value += 1;
   unusedEncodingSourceRefreshKey.value += 1;
   lineLengthSourceRefreshKey.value += 1;
+  textByteUsageSourceRefreshKey.value += 1;
 }
 
 async function readSentenceCoverageSource(): Promise<SentenceCoverageSource> {
@@ -1929,6 +2165,10 @@ function readStoredSentenceRows() {
     if (!Array.isArray(parsed.rows)) return [];
     return parsed.rows.map((row, index) => ({
       index,
+      original_text:
+        typeof (row as Partial<SentenceRow>).original_text === "string"
+          ? (row as Partial<SentenceRow>).original_text ?? ""
+          : "",
       translated_text:
         typeof (row as Partial<SentenceRow>).translated_text === "string"
           ? (row as Partial<SentenceRow>).translated_text ?? ""
@@ -1946,6 +2186,7 @@ function normalizeSentenceCoverageRows(rowsToNormalize: unknown) {
     const index = typeof item.index === "number" ? item.index : fallbackIndex;
     return {
       index,
+      original_text: typeof item.original_text === "string" ? item.original_text : "",
       translated_text: typeof item.translated_text === "string" ? item.translated_text : "",
     };
   });
@@ -1968,7 +2209,7 @@ async function runCharacterStats() {
   try {
     for (let rowIndex = 0; rowIndex < encodingRows.length; rowIndex += 1) {
       const row = encodingRows[rowIndex];
-      for (const token of encodingCharacterStatsTokens(row.original_char)) {
+      for (const token of encodingRowCharacterStatsTokens(row.original_char)) {
         targetTokens.add(token);
         counts.set(token, { count: 0, rowNumbers: new Set() });
       }
@@ -2009,14 +2250,15 @@ async function runCharacterStats() {
       return countDiff === 0 ? charA.localeCompare(charB) : countDiff;
     });
 
-    characterStatsResult.value = sortedRows
-      .map(([character, stats]) => {
+    characterStatsResult.value = [
+      statsTsvRow(["character", "count", "text_rows"]),
+      ...sortedRows.map(([character, stats]) => {
         const rowNumbers = Array.from(stats.rowNumbers)
           .sort((a, b) => a - b)
           .join(",");
-        return `${displayUnmappedToken(character)}\t${stats.count}\t${rowNumbers}`;
-      })
-      .join("\n");
+        return statsTsvRow([displayUnmappedToken(character), stats.count, rowNumbers]);
+      }),
+    ].join("\n");
 
     characterStatsMessage.value =
       sortedRows.length === 0
@@ -2040,7 +2282,8 @@ async function runUnmappedCharactersCheck() {
 
   const encodingChars = new Set(
     rows.value
-      .map((row) => row.original_char)
+      .filter((row) => encodingRowMatchesStates(row, unmappedEncodingStates.value))
+      .map((row) => encodingCharacterToken(row.original_char))
       .filter((char) => char !== ""),
   );
   const missingRows = new Map<string, { count: number; rows: Set<number> }>();
@@ -2079,11 +2322,16 @@ async function runUnmappedCharactersCheck() {
     );
 
     const totalOccurrences = sortedRows.reduce((total, [, match]) => total + match.count, 0);
-    unmappedResult.value = sortedRows
-      .map(([character, match]) =>
-        `unmapped char "${displayUnmappedToken(character)}" in row ${Array.from(match.rows).join(",")}`,
-      )
-      .join("\n");
+    unmappedResult.value = [
+      statsTsvRow(["character", "count", "text_rows"]),
+      ...sortedRows.map(([character, match]) =>
+        statsTsvRow([
+          displayUnmappedToken(character),
+          match.count,
+          Array.from(match.rows).join(","),
+        ]),
+      ),
+    ].join("\n");
     unmappedMessage.value =
       sortedRows.length === 0
         ? `${t("stats.noUnmappedCharactersFound")}: ${sourceRows.length} ${t("message.rows")}.`
@@ -2125,10 +2373,17 @@ async function runUnusedEncodingsCheck() {
       }
     }
 
-    const unusedRows: { character: string; code: string; rowNumber: number }[] = [];
-    for (let rowIndex = 0; rowIndex < rows.value.length; rowIndex += 1) {
-      const row = rows.value[rowIndex];
-      const character = row.original_char;
+    const unusedRows: {
+      character: string;
+      code: string;
+      rowNumber: number;
+      state: EncodingStateValue;
+    }[] = [];
+    const encodingRows = rows.value;
+    for (let rowIndex = 0; rowIndex < encodingRows.length; rowIndex += 1) {
+      const row = encodingRows[rowIndex];
+      if (!encodingRowMatchesStates(row, unusedEncodingStates.value)) continue;
+      const character = encodingCharacterToken(row.original_char);
       if (character === "" || !encodingCharacterMatchesUnusedSelection(character)) {
         continue;
       }
@@ -2138,14 +2393,15 @@ async function runUnusedEncodingsCheck() {
           character,
           code: row.code,
           rowNumber: rowIndex + 1,
+          state: row.state,
         });
       }
 
       if (rowIndex % 240 === 0 || rowIndex === rows.value.length - 1) {
         unusedEncodingProgress.value =
-          rows.value.length === 0
+          encodingRows.length === 0
             ? 100
-            : 70 + Math.round(((rowIndex + 1) / rows.value.length) * 30);
+            : 70 + Math.round(((rowIndex + 1) / encodingRows.length) * 30);
         await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
       }
     }
@@ -2156,12 +2412,17 @@ async function runUnusedEncodingsCheck() {
         : rowB.rowNumber - rowA.rowNumber,
     );
 
-    unusedEncodingResult.value = unusedRows
-      .map(
-        (row) =>
-          `unused encoding "${displayUnmappedToken(row.character)}" code ${row.code || "(empty)"} in encoding row ${row.rowNumber}`,
-      )
-      .join("\n");
+    unusedEncodingResult.value = [
+      statsTsvRow(["encoding_row", "character", "code", "state"]),
+      ...unusedRows.map((row) =>
+        statsTsvRow([
+          row.rowNumber,
+          displayUnmappedToken(row.character),
+          row.code,
+          row.state,
+        ]),
+      ),
+    ].join("\n");
     unusedEncodingMessage.value =
       unusedRows.length === 0
         ? `${t("stats.noUnusedEncodingsFound")}; ${t("stats.textRowsScanned")}: ${sourceRows.length}.`
@@ -2185,7 +2446,18 @@ async function runLineLengthCheck() {
   const sourceRows = sentenceRowsForLineLengthCheck();
   const maxLength = Math.max(0, Math.floor(lineLengthMaxLength.value));
   const encodingWidths = encodingWidthMap();
-  const overlongRows: string[] = [];
+  const issueRows: string[] = [
+    statsTsvRow([
+      "text_row",
+      "natural_line",
+      "status",
+      "length",
+      "max_length",
+      "missing_tokens",
+      "text",
+    ]),
+  ];
+  let issueCount = 0;
 
   try {
     // Natural lines are split by real newlines only. Visual newline markers in
@@ -2195,11 +2467,31 @@ async function runLineLengthCheck() {
       const naturalLines = row.translated_text.split(/\r\n|\r|\n/);
 
       naturalLines.forEach((line, lineIndex) => {
-        const measuredLength = measureLineLength(line, encodingWidths);
-        if (measuredLength > maxLength) {
-          overlongRows.push(
-            `row ${row.index + 1} line ${lineIndex + 1}: ${measuredLength} > ${maxLength}\t${line}`,
-          );
+        const measurement = measureLineLength(line, encodingWidths);
+        if (!measurement.ok) {
+          issueCount += 1;
+          issueRows.push(statsTsvRow([
+            row.index + 1,
+            lineIndex + 1,
+            "missing_width",
+            measurement.total,
+            maxLength,
+            formatMissingTokens(measurement.missingTokens),
+            line,
+          ]));
+          return;
+        }
+        if (measurement.total > maxLength) {
+          issueCount += 1;
+          issueRows.push(statsTsvRow([
+            row.index + 1,
+            lineIndex + 1,
+            "over_limit",
+            measurement.total,
+            maxLength,
+            "",
+            line,
+          ]));
         }
       });
 
@@ -2212,11 +2504,11 @@ async function runLineLengthCheck() {
       }
     }
 
-    lineLengthResult.value = overlongRows.join("\n");
+    lineLengthResult.value = issueRows.join("\n");
     lineLengthMessage.value =
-      overlongRows.length === 0
+      issueCount === 0
         ? `${t("stats.noOverlongNaturalLinesFound")}; ${t("stats.textRowsScanned")}: ${sourceRows.length}.`
-        : `${t("stats.foundOverlongNaturalLines")}: ${overlongRows.length}; ${t("stats.textRowsScanned")}: ${sourceRows.length}.`;
+        : `${t("stats.foundLineLengthIssues")}: ${issueCount}; ${t("stats.textRowsScanned")}: ${sourceRows.length}.`;
     statusMessage.value = lineLengthMessage.value;
   } finally {
     lineLengthProgress.value = 100;
@@ -2224,39 +2516,547 @@ async function runLineLengthCheck() {
   }
 }
 
+async function runTextByteUsageCheck() {
+  if (isCheckingTextByteUsage.value) return;
+
+  isCheckingTextByteUsage.value = true;
+  textByteUsageProgress.value = 0;
+  textByteUsageMessage.value = t("textByteUsage.checking");
+  errorMessage.value = "";
+  await nextTick();
+
+  const sourceRows = sentenceRowsForTextByteUsageCheck();
+  const selectedColumns = textByteUsageColumns.value.length > 0
+    ? textByteUsageColumns.value
+    : (["original", "translated"] as TextByteUsageColumn[]);
+  const selectedOutputSectionsBase = textByteUsageOutputSections.value.length > 0
+    ? textByteUsageOutputSections.value
+    : (["summary"] as TextByteUsageOutput[]);
+  const cellOverBytes = normalizedNonNegativeNumber(textByteUsageCellOverBytes.value);
+  const overOriginalBytes = normalizedNonNegativeNumber(
+    textByteUsageTranslatedOverOriginalBytes.value,
+  );
+  const overOriginalPercent = normalizedNonNegativeNumber(
+    textByteUsageTranslatedOverOriginalPercent.value,
+  );
+  const hasRowSummaryFilter =
+    cellOverBytes > 0 || overOriginalBytes > 0 || overOriginalPercent > 0;
+  // Threshold filters are meaningful only in row summaries, so include that
+  // section even when the user requested only summary/failure output.
+  const selectedOutputSections =
+    hasRowSummaryFilter && !selectedOutputSectionsBase.includes("row_summary")
+      ? [...selectedOutputSectionsBase, "row_summary" as TextByteUsageOutput]
+      : selectedOutputSectionsBase;
+  const byteMaps = {
+    original: encodingByteMap(textByteOriginalSettings.value),
+    translated: encodingByteMap(textByteTranslatedSettings.value),
+  };
+  const sideStats = {
+    original: createTextByteSideStats(),
+    translated: createTextByteSideStats(),
+  };
+  const outputRows = createTextByteOutputRows();
+
+  try {
+    for (let rowIndex = 0; rowIndex < sourceRows.length; rowIndex += 1) {
+      const row = sourceRows[rowIndex];
+      const rowNumber = row.index + 1;
+      const rowSummary = createTextByteRowSummary();
+      let rowFailedCells = 0;
+
+      for (const side of selectedColumns) {
+        const settings = textByteSettingsForSide(side);
+        const byteMap = byteMaps[side];
+        const cellText = textForByteSide(row, side);
+        const measurement = measureTextByteCell(cellText, settings, byteMap);
+        const columnName = textByteSideColumnName(side);
+        sideStats[side].rows += 1;
+        sideStats[side].cells += 1;
+
+        if (!measurement.ok) {
+          rowFailedCells += 1;
+          sideStats[side].failedCells += 1;
+          rowSummary[side].status = `missing ${formatMissingTokens(measurement.missingTokens)}`;
+          outputRows.failures.push(textByteTsvRow([
+            rowNumber,
+            columnName,
+            `FAILED missing encoding code for ${formatMissingTokens(measurement.missingTokens)}`,
+            formatTextByteCellText(cellText),
+          ]));
+          continue;
+        }
+
+        sideStats[side].totalBytes += measurement.total;
+        sideStats[side].maxCellBytes = Math.max(sideStats[side].maxCellBytes, measurement.total);
+        rowSummary[side].bytes = measurement.total;
+        rowSummary[side].status = "ok";
+        outputRows.cellDetails.push(textByteTsvRow([
+          rowNumber,
+          columnName,
+          measurement.total,
+          "ok",
+          formatTextByteCellText(cellText),
+        ]));
+
+      }
+
+      const translatedOriginalDiff = textByteRowTranslatedOriginalDiff(rowSummary);
+      const translatedOriginalRatio = textByteRowTranslatedOriginalRatio(rowSummary);
+      const rowMatchesCellLimit =
+        cellOverBytes > 0 && textByteRowMaxSelectedCellBytes(rowSummary, selectedColumns) > cellOverBytes;
+      const rowMatchesDiffLimit =
+        overOriginalBytes > 0 &&
+        typeof translatedOriginalDiff === "number" &&
+        translatedOriginalDiff > overOriginalBytes;
+      const rowMatchesRatioLimit =
+        overOriginalPercent > 0 &&
+        typeof translatedOriginalRatio === "number" &&
+        translatedOriginalRatio > overOriginalPercent;
+
+      if (
+        !hasRowSummaryFilter ||
+        rowMatchesCellLimit ||
+        rowMatchesDiffLimit ||
+        rowMatchesRatioLimit
+      ) {
+        outputRows.rowSummaries.push(textByteTsvRow([
+          rowNumber,
+          rowSummary.original.bytes,
+          rowSummary.original.status,
+          rowSummary.translated.bytes,
+          rowSummary.translated.status,
+          typeof translatedOriginalDiff === "number" ? translatedOriginalDiff : "",
+          typeof translatedOriginalRatio === "number" && Number.isFinite(translatedOriginalRatio)
+            ? translatedOriginalRatio.toFixed(2)
+            : "",
+          rowFailedCells,
+        ]));
+      }
+
+      if (rowIndex % 80 === 0 || rowIndex === sourceRows.length - 1) {
+        textByteUsageProgress.value =
+          sourceRows.length === 0
+            ? 100
+            : Math.round(((rowIndex + 1) / sourceRows.length) * 100);
+        await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
+      }
+    }
+
+    textByteUsageResult.value = buildTextByteUsageResult(
+      sourceRows.length,
+      selectedColumns,
+      selectedOutputSections,
+      sideStats,
+      outputRows,
+    );
+    const visibleDetailCount = textByteVisibleDetailCount(
+      selectedOutputSections,
+      outputRows,
+    );
+    const hasSummaryOutput = selectedOutputSections.includes("summary");
+    textByteUsageMessage.value =
+      visibleDetailCount === 0 && !hasSummaryOutput
+        ? `${t("textByteUsage.noDetails")}; ${t("stats.textRowsScanned")}: ${sourceRows.length}.`
+        : visibleDetailCount === 0
+          ? `${t("textByteUsage.summaryGenerated")}; ${t("stats.textRowsScanned")}: ${sourceRows.length}.`
+        : `${t("textByteUsage.foundDetails")}: ${visibleDetailCount}; ${t("stats.textRowsScanned")}: ${sourceRows.length}.`;
+    statusMessage.value = textByteUsageMessage.value;
+  } finally {
+    textByteUsageProgress.value = 100;
+    isCheckingTextByteUsage.value = false;
+  }
+}
+
 function encodingWidthMap() {
   const widths = new Map<string, number>();
-  rows.value.forEach((row) => {
-    const character = row.original_char;
-    if (character === "") return;
-    const width = Number(row.width);
-    widths.set(character, Number.isFinite(width) ? Math.max(0, width) : 0);
-  });
+  rows.value
+    .filter((row) => encodingRowMatchesStates(row, lineLengthEncodingStates.value))
+    .forEach((row) => {
+      const character = encodingCharacterToken(row.original_char);
+      if (character === "") return;
+      const rawWidth = row.width.trim();
+      if (rawWidth === "") return;
+      const width = Number(rawWidth);
+      if (Number.isFinite(width)) {
+        widths.set(character, Math.max(0, width));
+      }
+    });
   return widths;
 }
 
-function measureLineLength(line: string, encodingWidths: Map<string, number>) {
+function encodingRowMatchesStates(row: EncodingRow, states: EncodingUsageState[]) {
+  // "both" is not a fourth usage class; it means the row participates in either
+  // original-side or translated-side checks.
+  const state = normalizeEncodingState(row.state);
+  if (state === "both") {
+    return states.includes("original") || states.includes("translated");
+  }
+  return states.includes(state);
+}
+
+function createTextByteSideStats() {
+  return {
+    cells: 0,
+    failedCells: 0,
+    maxCellBytes: 0,
+    rows: 0,
+    totalBytes: 0,
+  };
+}
+
+function createTextByteRowSummary() {
+  return {
+    original: { bytes: "" as string | number, status: "" },
+    translated: { bytes: "" as string | number, status: "" },
+  };
+}
+
+function createTextByteOutputRows() {
+  return {
+    cellDetails: [] as string[],
+    failures: [] as string[],
+    rowSummaries: [] as string[],
+  };
+}
+
+function textByteVisibleDetailCount(
+  selectedSections: TextByteUsageOutput[],
+  outputRows: ReturnType<typeof createTextByteOutputRows>,
+) {
+  let count = 0;
+  if (selectedSections.includes("row_summary")) count += outputRows.rowSummaries.length;
+  if (selectedSections.includes("cell_details")) count += outputRows.cellDetails.length;
+  if (selectedSections.includes("failures")) count += outputRows.failures.length;
+  return count;
+}
+
+function textByteRowTranslatedOriginalDiff(rowSummary: ReturnType<typeof createTextByteRowSummary>) {
+  if (
+    typeof rowSummary.original.bytes !== "number" ||
+    typeof rowSummary.translated.bytes !== "number"
+  ) {
+    return "";
+  }
+  return rowSummary.translated.bytes - rowSummary.original.bytes;
+}
+
+function textByteRowTranslatedOriginalRatio(
+  rowSummary: ReturnType<typeof createTextByteRowSummary>,
+) {
+  if (
+    typeof rowSummary.original.bytes !== "number" ||
+    typeof rowSummary.translated.bytes !== "number"
+  ) {
+    return "";
+  }
+  if (rowSummary.original.bytes === 0) {
+    return rowSummary.translated.bytes > 0 ? Infinity : 0;
+  }
+  return (rowSummary.translated.bytes / rowSummary.original.bytes) * 100;
+}
+
+function textByteRowMaxSelectedCellBytes(
+  rowSummary: ReturnType<typeof createTextByteRowSummary>,
+  selectedColumns: TextByteUsageColumn[],
+) {
+  return Math.max(
+    0,
+    ...selectedColumns
+      .map((side) => rowSummary[side].bytes)
+      .filter((value): value is number => typeof value === "number"),
+  );
+}
+
+function normalizedNonNegativeNumber(value: unknown) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? Math.max(0, parsed) : 0;
+}
+
+function textByteSettingsForSide(side: TextByteUsageColumn) {
+  return side === "original"
+    ? textByteOriginalSettings.value
+    : textByteTranslatedSettings.value;
+}
+
+function textForByteSide(row: SentenceCoverageRow, side: TextByteUsageColumn) {
+  return side === "original" ? row.original_text : row.translated_text;
+}
+
+function textByteSideColumnName(side: TextByteUsageColumn) {
+  return side === "original" ? "original_text" : "translated_text";
+}
+
+function encodingByteMap(settings: TextByteUsageSettings) {
+  const bytes = new Map<string, number>();
+  // Invalid/blank codes are skipped here so fallback policy is decided in the
+  // measurement function, where missing tokens can also be reported.
+  rows.value
+    .filter((row) => encodingRowMatchesStates(row, settings.activeStates as EncodingUsageState[]))
+    .forEach((row) => {
+      const character = encodingCharacterToken(row.original_char);
+      if (character === "") return;
+      const byteLength = encodingCodeByteLength(row.code);
+      if (byteLength === null) return;
+      bytes.set(character, byteLength);
+    });
+  return bytes;
+}
+
+function encodingCodeByteLength(code: string) {
+  const normalized = code.trim().replace(/^0x/i, "").replace(/\s+/g, "");
+  if (normalized === "" || !/^[\da-f]+$/i.test(normalized)) return null;
+  return Math.max(1, Math.ceil(normalized.length / 2));
+}
+
+function measureTextByteCell(
+  text: string,
+  settings: TextByteUsageSettings,
+  byteMap: Map<string, number>,
+) {
+  // Bracket tokens such as [NAME] can be counted as a single token. Everything
+  // else walks by Unicode code point so surrogate pairs stay intact.
   let total = 0;
   let index = 0;
+  const missingTokens = new Set<string>();
+
+  while (index < text.length) {
+    const bracketToken = textByteBracketedTokenAt(text, index, settings);
+    if (bracketToken) {
+      const bytes = textByteTokenBytes(bracketToken.token, "token", settings, byteMap);
+      if (bytes === null) {
+        missingTokens.add(bracketToken.token);
+      } else {
+        total += bytes;
+      }
+      index = bracketToken.nextIndex;
+      continue;
+    }
+
+    const character = Array.from(text.slice(index))[0] ?? "";
+    if (character === "") break;
+    const bytes = textByteTokenBytes(
+      character,
+      textByteCharacterType(character),
+      settings,
+      byteMap,
+    );
+    if (bytes === null) {
+      missingTokens.add(character);
+    } else {
+      total += bytes;
+    }
+    index += character.length;
+  }
+
+  return {
+    missingTokens,
+    ok: missingTokens.size === 0,
+    total,
+  };
+}
+
+function textByteTokenBytes(
+  token: string,
+  type: TextByteCharacterType,
+  settings: TextByteUsageSettings,
+  byteMap: Map<string, number>,
+) {
+  const rule = settings.byteRules[type];
+  if (rule.mode === "fixed") return rule.fixed;
+  const bytes = byteMap.get(token);
+  if (typeof bytes === "number") return bytes;
+  return settings.useFixedFallback ? rule.fixed : null;
+}
+
+function textByteBracketedTokenAt(
+  text: string,
+  startIndex: number,
+  settings: TextByteUsageSettings,
+) {
+  const pairs: Record<string, {
+    close: string;
+    type: TextByteUsageSettings["bracketTokenTypes"][number];
+  }> = {
+    "[": { close: "]", type: "square" },
+    "{": { close: "}", type: "curly" },
+    "<": { close: ">", type: "angle" },
+  };
+  const pair = pairs[text[startIndex] ?? ""];
+  if (!pair || !settings.bracketTokenTypes.includes(pair.type)) return null;
+  const endIndex = text.indexOf(pair.close, startIndex + 1);
+  if (endIndex === -1) return null;
+  return {
+    nextIndex: endIndex + 1,
+    token: text.slice(startIndex, endIndex + 1),
+  };
+}
+
+function textByteCharacterType(character: string): TextByteCharacterType {
+  if (character === "\n") return "newline";
+  return lineLengthCharacterType(character) as TextByteCharacterType;
+}
+
+function formatMissingTokens(tokens: Set<string>) {
+  return Array.from(tokens)
+    .map((token) => `"${displayUnmappedToken(token)}"`)
+    .join(",");
+}
+
+function statsTsvCell(value: string | number) {
+  return String(value)
+    .replace(/\r/g, "\\r")
+    .replace(/\n/g, "\\n")
+    .replace(/\t/g, "\\t");
+}
+
+function statsTsvRow(values: Array<string | number>) {
+  return values.map(statsTsvCell).join("\t");
+}
+
+function formatTextByteCellText(text: string) {
+  return statsTsvCell(text);
+}
+
+function textByteTsvRow(values: Array<string | number>) {
+  return statsTsvRow(values);
+}
+
+function textByteCellDetailsHeader() {
+  return "row\tcolumn\tbytes\tstatus\ttext";
+}
+
+function textByteFailuresHeader() {
+  return "row\tcolumn\terror\ttext";
+}
+
+function textByteRowSummaryHeader() {
+  return "row\toriginal_bytes\toriginal_status\ttranslated_bytes\ttranslated_status\ttranslated_minus_original_bytes\ttranslated_original_percent\tfailed_cells";
+}
+
+function buildTextByteUsageResult(
+  sourceRowCount: number,
+  selectedColumns: TextByteUsageColumn[],
+  selectedSections: TextByteUsageOutput[],
+  sideStats: Record<TextByteUsageColumn, ReturnType<typeof createTextByteSideStats>>,
+  outputRows: ReturnType<typeof createTextByteOutputRows>,
+) {
+  const resultSections: string[] = [];
+
+  if (selectedSections.includes("summary")) {
+    const summaryLines = [
+      t("textByteUsage.outputSummary"),
+      "metric\tcolumn\tvalue",
+      textByteTsvRow(["text_rows_scanned", "", sourceRowCount]),
+    ];
+
+    selectedColumns.forEach((side) => {
+      const stats = sideStats[side];
+      const average = stats.rows === 0 ? 0 : stats.totalBytes / stats.rows;
+      const columnName = textByteSideColumnName(side);
+      summaryLines.push(textByteTsvRow(["total_bytes", columnName, stats.totalBytes]));
+      summaryLines.push(textByteTsvRow(["rows", columnName, stats.rows]));
+      summaryLines.push(textByteTsvRow(["cells", columnName, stats.cells]));
+      summaryLines.push(textByteTsvRow(["failed_cells", columnName, stats.failedCells]));
+      summaryLines.push(textByteTsvRow(["max_cell_bytes", columnName, stats.maxCellBytes]));
+      summaryLines.push(textByteTsvRow(["avg_bytes_per_row", columnName, average.toFixed(2)]));
+    });
+
+    if (selectedColumns.includes("original") && selectedColumns.includes("translated")) {
+      const originalTotal = sideStats.original.totalBytes;
+      const translatedTotal = sideStats.translated.totalBytes;
+      const ratio =
+        originalTotal === 0
+          ? (translatedTotal > 0 ? Infinity : 0)
+          : (translatedTotal / originalTotal) * 100;
+      summaryLines.push(textByteTsvRow([
+        "translated_original_total_ratio",
+        "translated_text/original_text",
+        Number.isFinite(ratio) ? `${ratio.toFixed(2)}%` : "Infinity",
+      ]));
+    }
+
+    resultSections.push(summaryLines.join("\n"));
+  }
+
+  addTextByteResultSection(
+    resultSections,
+    selectedSections,
+    "failures",
+    t("textByteUsage.outputFailures"),
+    outputRows.failures,
+    textByteFailuresHeader(),
+  );
+  addTextByteResultSection(
+    resultSections,
+    selectedSections,
+    "row_summary",
+    t("textByteUsage.outputRowSummary"),
+    outputRows.rowSummaries,
+    textByteRowSummaryHeader(),
+  );
+  addTextByteResultSection(
+    resultSections,
+    selectedSections,
+    "cell_details",
+    t("textByteUsage.outputCellDetails"),
+    outputRows.cellDetails,
+    textByteCellDetailsHeader(),
+  );
+
+  return resultSections.length > 0
+    ? resultSections.join("\n\n")
+    : t("textByteUsage.noDetails");
+}
+
+function addTextByteResultSection(
+  resultSections: string[],
+  selectedSections: TextByteUsageOutput[],
+  section: TextByteUsageOutput,
+  title: string,
+  rowsToOutput: string[],
+  header: string,
+) {
+  if (!selectedSections.includes(section)) return;
+  resultSections.push([title, header, ...rowsToOutput].join("\n"));
+}
+
+function measureLineLength(line: string, encodingWidths: Map<string, number>) {
+  // This measures one natural line, not the browser-wrapped display line. Missing
+  // encoding widths can either fail the line or fall back to fixed values.
+  let total = 0;
+  let index = 0;
+  const missingTokens = new Set<string>();
 
   while (index < line.length) {
     const bracketToken = lineLengthBracketedTokenAt(line, index);
     if (bracketToken) {
-      total += lineLengthTokenWidth(bracketToken.token, "token", encodingWidths);
+      const width = lineLengthTokenWidth(bracketToken.token, "token", encodingWidths);
+      if (width === null) {
+        missingTokens.add(bracketToken.token);
+      } else {
+        total += width;
+      }
       index = bracketToken.endIndex;
       continue;
     }
 
     const character = Array.from(line.slice(index))[0] ?? "";
     index += character.length;
-    total += lineLengthTokenWidth(
+    const width = lineLengthTokenWidth(
       character,
       lineLengthCharacterType(character),
       encodingWidths,
     );
+    if (width === null) {
+      missingTokens.add(character);
+    } else {
+      total += width;
+    }
   }
 
-  return total;
+  return missingTokens.size > 0
+    ? { missingTokens, ok: false as const, total }
+    : { missingTokens, ok: true as const, total };
 }
 
 function lineLengthTokenWidth(
@@ -2266,7 +3066,9 @@ function lineLengthTokenWidth(
 ) {
   const rule = lineLengthWidthRules.value[type];
   if (rule.mode === "fixed") return rule.fixed;
-  return encodingWidths.get(token) ?? rule.fixed;
+  const encodingWidth = encodingWidths.get(token);
+  if (encodingWidth !== undefined) return encodingWidth;
+  return lineLengthUseFixedFallback.value ? rule.fixed : null;
 }
 
 function lineLengthBracketedTokenAt(text: string, startIndex: number) {
@@ -2297,6 +3099,18 @@ function lineLengthCharacterType(character: string): LineLengthCharacterType {
   if (characterMatchesSingleUnmappedType(character, "fullwidth")) return "fullwidth";
   if (characterMatchesSingleUnmappedType(character, "halfwidth")) return "halfwidth";
   return "other";
+}
+
+function encodingCharacterToken(character: string) {
+  // Users type the visible two-character token "\n" in the table to represent
+  // an actual newline in coverage and byte-length checks.
+  return character === "\\n" ? "\n" : character;
+}
+
+function encodingRowCharacterStatsTokens(character: string) {
+  const token = encodingCharacterToken(character);
+  if (token !== character) return [token];
+  return encodingCharacterStatsTokens(character);
 }
 
 function encodingCharacterStatsTokens(text: string) {
@@ -2596,6 +3410,21 @@ async function copyLineLengthResult() {
   }
 }
 
+async function copyTextByteUsageResult() {
+  if (textByteUsageResult.value === "") return;
+
+  try {
+    await copyText(textByteUsageResult.value);
+    textByteUsageMessage.value = t("textByteUsage.resultCopied");
+    statusMessage.value = textByteUsageMessage.value;
+    errorMessage.value = "";
+  } catch (error) {
+    errorMessage.value =
+      error instanceof Error ? error.message : t("textByteUsage.failedCopyResult");
+    statusMessage.value = "";
+  }
+}
+
 async function copyText(text: string) {
   if (navigator.clipboard?.writeText) {
     await navigator.clipboard.writeText(text);
@@ -2741,6 +3570,10 @@ async function rowsFromExcelImport() {
     excelImportWidthColumn.value,
     "width column",
   );
+  const stateColumn = optionalPositiveInteger(
+    excelImportStateColumn.value,
+    "state column",
+  );
   const noteColumn = optionalPositiveInteger(
     excelImportNoteColumn.value,
     "note column",
@@ -2754,9 +3587,11 @@ async function rowsFromExcelImport() {
       const originalChar = charColumn ? excelCellText(cells, charColumn) : "";
       const code = codeColumn ? normalizeCode(excelCellText(cells, codeColumn)) : "";
       const width = widthColumn ? excelCellText(cells, widthColumn) : "";
+      const rawState = stateColumn ? excelCellText(cells, stateColumn) : "";
+      const state = stateColumn ? normalizeEncodingState(rawState) : "both";
       const note = noteColumn ? excelCellText(cells, noteColumn) : "";
 
-      if (originalChar === "" && code === "" && width === "" && note === "") {
+      if (originalChar === "" && code === "" && width === "" && rawState === "" && note === "") {
         continue;
       }
 
@@ -2764,6 +3599,7 @@ async function rowsFromExcelImport() {
         original_char: originalChar,
         code,
         width,
+        state,
         note,
       });
     }
@@ -2807,6 +3643,8 @@ function formatMessageTimestamp() {
 }
 
 function parseEncodingTableText(text: string) {
+  // TBL/TXT import is intentionally lossy: it creates char/code rows only.
+  // Width/note are metadata and state defaults to "both".
   const normalizedText = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
   const parsedRows: EncodingRow[] = [];
 
@@ -2824,6 +3662,7 @@ function parseEncodingTableText(text: string) {
       original_char: importDirection.value === "code_char" ? right : left,
       code: importDirection.value === "code_char" ? normalizeCode(left) : normalizeCode(right),
       width: "",
+      state: "both",
       note: "",
     });
   });
@@ -2882,17 +3721,18 @@ async function confirmExcelExport() {
 }
 
 function rowsForExcelExport() {
+  let exportRows: { row: EncodingRow; index: number }[];
   if (excelExportScope.value === "filtered") {
-    return filteredRows.value.map(({ row, index }) => ({ row, index }));
-  }
-
-  if (excelExportScope.value === "selected") {
-    return rows.value
+    exportRows = filteredRows.value.map(({ row, index }) => ({ row, index }));
+  } else if (excelExportScope.value === "selected") {
+    exportRows = rows.value
       .map((row, index) => ({ row, index }))
       .filter(({ row }) => selectedRowIds.value.has(getRowIdentity(row)));
+  } else {
+    exportRows = rows.value.map((row, index) => ({ row, index }));
   }
 
-  return rows.value.map((row, index) => ({ row, index }));
+  return exportRows.filter(({ row }) => encodingRowMatchesStates(row, excelExportStates.value));
 }
 
 async function browseExportPath() {
@@ -2938,15 +3778,18 @@ async function confirmExportText() {
 }
 
 function rowsForTextExport() {
+  // TBL/TXT export applies scope first and encoding-state filtering second.
+  // The state itself is not serialized into the output file.
+  let exportRows: EncodingRow[];
   if (exportScope.value === "filtered") {
-    return filteredRows.value.map(({ row }) => row);
+    exportRows = filteredRows.value.map(({ row }) => row);
+  } else if (exportScope.value === "selected") {
+    exportRows = rows.value.filter((row) => selectedRowIds.value.has(getRowIdentity(row)));
+  } else {
+    exportRows = rows.value;
   }
 
-  if (exportScope.value === "selected") {
-    return rows.value.filter((row) => selectedRowIds.value.has(getRowIdentity(row)));
-  }
-
-  return rows.value;
+  return exportRows.filter((row) => encodingRowMatchesStates(row, exportStates.value));
 }
 
 function serializeEncodingTableRows(exportRows: EncodingRow[]) {
@@ -3108,6 +3951,22 @@ function openBulkColumnDialog() {
   bulkColumnValue.value = "";
 }
 
+function openBulkStateDialog() {
+  pruneSelectedRows(true);
+  if (selectedRowIds.value.size === 0) {
+    isTopPanelVisible.value = true;
+    statusMessage.value = t("message.noRowsSelected");
+    errorMessage.value = "";
+    return;
+  }
+
+  if (!openEncodingDialog("bulkState")) return;
+}
+
+function closeBulkStateDialog() {
+  isBulkStateDialogOpen.value = false;
+}
+
 function focusPasteCell(rowIndex: number, columnKey: keyof EncodingRow) {
   focusedPasteCell.value = { columnKey, rowIndex };
 }
@@ -3189,6 +4048,7 @@ function tableCellRange(anchor: EncodingTableCell, cell: EncodingTableCell) {
   const cellColumnIndex = columns.indexOf(cell.columnKey);
   if (anchorColumnIndex === -1 || cellColumnIndex === -1) return new Set<string>();
 
+  // Range selection follows the filtered row order so hidden rows are skipped.
   const fromColumn = Math.min(anchorColumnIndex, cellColumnIndex);
   const toColumn = Math.max(anchorColumnIndex, cellColumnIndex);
   const nextSelection = new Set<string>();
@@ -3336,20 +4196,22 @@ function enterTableCellEdit(cell: EncodingTableCell) {
   activeTableCell.value = cell;
   focusedPasteCell.value = cell;
   nextTick(() => {
-    const selector = `.textarea-cell[data-cell-row-index="${cell.rowIndex}"][data-cell-column="${cell.columnKey}"] textarea`;
-    const textarea = tableWrap.value?.querySelector<HTMLTextAreaElement>(selector);
-    textarea?.focus();
-    textarea?.select();
+    const selector = `.textarea-cell[data-cell-row-index="${cell.rowIndex}"][data-cell-column="${cell.columnKey}"] textarea, .textarea-cell[data-cell-row-index="${cell.rowIndex}"][data-cell-column="${cell.columnKey}"] select`;
+    const control = tableWrap.value?.querySelector<HTMLTextAreaElement | HTMLSelectElement>(selector);
+    control?.focus();
+    if (control instanceof HTMLTextAreaElement) {
+      control.select();
+    }
   });
 }
 
 function exitTableCellEdit(blurTextarea = true) {
   const editingCell = editingTableCell.value;
   if (blurTextarea && editingCell) {
-    const selector = `.textarea-cell[data-cell-row-index="${editingCell.rowIndex}"][data-cell-column="${editingCell.columnKey}"] textarea`;
-    const textarea = tableWrap.value?.querySelector<HTMLTextAreaElement>(selector);
-    if (textarea && document.activeElement === textarea) {
-      textarea.blur();
+    const selector = `.textarea-cell[data-cell-row-index="${editingCell.rowIndex}"][data-cell-column="${editingCell.columnKey}"] textarea, .textarea-cell[data-cell-row-index="${editingCell.rowIndex}"][data-cell-column="${editingCell.columnKey}"] select`;
+    const control = tableWrap.value?.querySelector<HTMLTextAreaElement | HTMLSelectElement>(selector);
+    if (control && document.activeElement === control) {
+      control.blur();
     }
   }
   editingTableCell.value = null;
@@ -3393,6 +4255,8 @@ function clearTableCellSelection() {
 }
 
 function syncRowSelectionFromTableCells() {
+  // Existing bulk actions are row-based. Cell selection mirrors its row set into
+  // selectedRowIds so those actions can keep using one source of truth.
   const nextSelectedIds = new Set<number>();
   selectedTableCellList().forEach((cell) => {
     const row = rows.value[cell.rowIndex];
@@ -3418,6 +4282,8 @@ function runTableCellDragAutoScroll() {
   tableCellAutoScrollFrame = undefined;
   if (!isDraggingTableCellSelection.value || !tableWrap.value) return;
 
+  // During drag selection the pointer may stay outside the mounted virtual rows;
+  // auto-scroll and elementFromPoint keep extending the range as rows appear.
   const bounds = tableWrap.value.getBoundingClientRect();
   const edgeSize = 56;
   const topDistance = tableCellDragPointerY - bounds.top;
@@ -3507,12 +4373,18 @@ function clearSelectedTableCells() {
   const cells = selectedTableCellList();
   if (cells.length === 0) return;
 
-  const changedCells = cells.filter((cell) => rows.value[cell.rowIndex][cell.columnKey] !== "");
+  const changedCells = cells.filter(
+    (cell) => rows.value[cell.rowIndex][cell.columnKey] !== emptyEncodingCellValue(cell.columnKey),
+  );
   if (changedCells.length === 0) return;
 
   recordCurrentStateForUndo();
   changedCells.forEach((cell) => {
-    rows.value[cell.rowIndex][cell.columnKey] = "";
+    setEncodingCellValue(
+      rows.value[cell.rowIndex],
+      cell.columnKey,
+      emptyEncodingCellValue(cell.columnKey),
+    );
   });
   rows.value = [...rows.value];
 }
@@ -3700,10 +4572,13 @@ async function confirmCodeShift() {
       return;
     }
 
-    row[codeShiftColumn.value] =
+    setEncodingCellValue(
+      row,
+      codeShiftColumn.value,
       codeShiftColumn.value === "code"
         ? formatCodeValue(nextCode, row[codeShiftColumn.value])
-        : formatHexCellValue(nextCode, row[codeShiftColumn.value]);
+        : formatHexCellValue(nextCode, row[codeShiftColumn.value]),
+    );
     changedCount += 1;
   });
 
@@ -3777,7 +4652,7 @@ async function confirmBulkColumnChange() {
   rows.value.forEach((row) => {
     if (!selectedIds.has(getRowIdentity(row))) return;
     changedCount += 1;
-    row[columnKey] = columnKey === "code" ? normalizeCode(bulkColumnValue.value) : bulkColumnValue.value;
+    setEncodingCellValue(row, columnKey, bulkColumnValue.value);
   });
   if (changedCount > 0) {
     recordHistoryStep(historySnapshot);
@@ -3786,6 +4661,41 @@ async function confirmBulkColumnChange() {
   pruneSelectedRows(true);
   closeBulkColumnDialog();
   statusMessage.value = `${t("bulk.changedColumnPrefix")}: ${changedCount}; ${columnKey} = ${bulkColumnValue.value}.`;
+  errorMessage.value = "";
+}
+
+async function confirmBulkStateChange() {
+  pruneSelectedRows(true);
+  const selectedIds = selectedRowIds.value;
+  if (selectedIds.size === 0) {
+    closeBulkStateDialog();
+    return;
+  }
+
+  const confirmed = await confirm(
+    `${t("bulk.columnConfirmPrefix")} ${selectedIds.size} ${t("bulk.columnConfirmMiddle")} state${t("bulk.columnConfirmSuffix")}`,
+    {
+      title: t("bulk.title"),
+      kind: "warning",
+    },
+  );
+
+  if (!confirmed) return;
+
+  const historySnapshot = createTableSnapshot();
+  let changedCount = 0;
+  rows.value.forEach((row) => {
+    if (!selectedIds.has(getRowIdentity(row))) return;
+    row.state = bulkStateValue.value;
+    changedCount += 1;
+  });
+  if (changedCount > 0) {
+    recordHistoryStep(historySnapshot);
+  }
+  rows.value = [...rows.value];
+  pruneSelectedRows(true);
+  closeBulkStateDialog();
+  statusMessage.value = `${t("bulk.changedColumnPrefix")}: ${changedCount}; state = ${bulkStateValue.value}.`;
   errorMessage.value = "";
 }
 
@@ -4009,6 +4919,8 @@ async function scrollToFilteredRowWithMeasurement(filteredIndex: number) {
   const target = filteredRows.value[filteredIndex];
   if (!target) return;
 
+  // Virtual rows first use estimated heights. Retry after paint until the target
+  // is mounted, then align by its measured DOM location.
   for (let attempt = 0; attempt < 4; attempt += 1) {
     const nextScrollTop = sumRowHeights(filteredRows.value, 0, filteredIndex);
     tableScrollTop.value = nextScrollTop;
@@ -4083,7 +4995,7 @@ function replacementForFindCell(value: string, columnKey: keyof EncodingRow) {
           findReplaceReplacement.value,
         );
 
-  return columnKey === "code" ? normalizeCode(replaced) : replaced;
+  return normalizeEncodingCellValue(columnKey, replaced);
 }
 
 function escapeRegExp(value: string) {
@@ -4156,7 +5068,7 @@ function replaceCurrentFindReplaceMatch() {
   if (nextValue === currentValue) return;
 
   recordCurrentStateForUndo();
-  match.row[match.columnKey] = nextValue;
+  setEncodingCellValue(match.row, match.columnKey, nextValue);
   statusMessage.value = `${t("find.replacedCells")}: 1.`;
   errorMessage.value = "";
 }
@@ -4180,7 +5092,7 @@ async function replaceAllFindReplaceMatches() {
     const currentValue = match.row[match.columnKey];
     const nextValue = replacementForFindCell(currentValue, match.columnKey);
     if (nextValue === currentValue) continue;
-    match.row[match.columnKey] = nextValue;
+    setEncodingCellValue(match.row, match.columnKey, nextValue);
     changedCount += 1;
   }
 
@@ -4299,6 +5211,36 @@ function normalizeEditedCode(row: EncodingRow) {
   row.code = normalizeCode(row.code);
 }
 
+function normalizeEncodingCellValue(columnKey: keyof EncodingRow, value: string) {
+  if (columnKey === "code") return normalizeCode(value);
+  if (columnKey === "state") return normalizeEncodingState(value);
+  return value;
+}
+
+function setEncodingCellValue(row: EncodingRow, columnKey: keyof EncodingRow, value: string) {
+  if (columnKey === "original_char") {
+    row.original_char = value;
+    return;
+  }
+  if (columnKey === "code") {
+    row.code = normalizeCode(value);
+    return;
+  }
+  if (columnKey === "width") {
+    row.width = value;
+    return;
+  }
+  if (columnKey === "state") {
+    row.state = normalizeEncodingState(value);
+    return;
+  }
+  row.note = value;
+}
+
+function emptyEncodingCellValue(columnKey: keyof EncodingRow) {
+  return columnKey === "state" ? "both" : "";
+}
+
 function normalizeCode(value: string) {
   const hex = value.replace(/[^0-9a-f]/gi, "").toUpperCase();
   if (hex === "") return "";
@@ -4306,9 +5248,21 @@ function normalizeCode(value: string) {
 }
 
 function toggleFilter(filter: EncodingFilter) {
-  activeFilters.value = activeFilters.value.includes(filter)
-    ? activeFilters.value.filter((item) => item !== filter)
+  activeFilters.value = activeFilters.value.some((item) => sameEncodingFilter(item, filter))
+    ? activeFilters.value.filter((item) => !sameEncodingFilter(item, filter))
     : [...activeFilters.value, filter];
+}
+
+function encodingFilterKey(filter: EncodingFilter) {
+  return typeof filter === "string" ? filter : `state:${filter.state}`;
+}
+
+function sameEncodingFilter(left: EncodingFilter, right: EncodingFilter) {
+  return encodingFilterKey(left) === encodingFilterKey(right);
+}
+
+function isEncodingStateFilter(filter: EncodingFilter): filter is EncodingStateFilter {
+  return typeof filter === "object" && filter.type === "state";
 }
 
 function clearRowFilter() {
@@ -4321,12 +5275,13 @@ function resetSearchFilters() {
   isCaseSensitiveSearch.value = false;
   selectedSearchColumns.value = [...searchableColumns];
   activeFilters.value = [];
+  stateFilterJoinMode.value = "and";
   filterJoinMode.value = "or";
   rowFilterStart.value = "";
   rowFilterEnd.value = "";
 }
 
-function isCharacterTypeFilter(filter: EncodingFilter) {
+function isCharacterTypeFilter(filter: EncodingFilter): filter is EncodingConditionFilter {
   return (
     filter === "punctuation" ||
     filter === "han" ||
@@ -4340,10 +5295,16 @@ function isCharacterTypeFilter(filter: EncodingFilter) {
 function rowMatchesActiveFilters(row: EncodingRow) {
   if (activeFilters.value.length === 0) return true;
 
+  const stateFilters = activeFilters.value.filter(isEncodingStateFilter);
   const characterFilters = activeFilters.value.filter(isCharacterTypeFilter);
   const conditionFilters = activeFilters.value.filter(
-    (filter) => !isCharacterTypeFilter(filter),
+    (filter): filter is EncodingConditionFilter =>
+      typeof filter === "string" && !isCharacterTypeFilter(filter),
   );
+  const hasNonStateFilters = characterFilters.length > 0 || conditionFilters.length > 0;
+  const matchesStateGroup =
+    stateFilters.length === 0 ||
+    stateFilters.some((filter) => normalizeEncodingState(row.state) === filter.state);
   const matchesCharacterGroup =
     characterFilters.length === 0 ||
     characterFilters.some((filter) => rowMatchesFilter(row, filter));
@@ -4351,25 +5312,32 @@ function rowMatchesActiveFilters(row: EncodingRow) {
     conditionFilters.length === 0 ||
     conditionFilters.some((filter) => rowMatchesFilter(row, filter));
 
-  if (filterJoinMode.value === "and") {
-    return matchesCharacterGroup && matchesConditionGroup;
+  const matchesNonStateGroup = !hasNonStateFilters
+    ? true
+    : filterJoinMode.value === "and"
+      ? matchesCharacterGroup && matchesConditionGroup
+      : (characterFilters.length > 0 && matchesCharacterGroup) ||
+        (conditionFilters.length > 0 && matchesConditionGroup);
+
+  if (stateFilterJoinMode.value === "and") {
+    return matchesStateGroup && matchesNonStateGroup;
   }
 
   return (
-    (characterFilters.length > 0 && matchesCharacterGroup) ||
-    (conditionFilters.length > 0 && matchesConditionGroup)
+    (stateFilters.length > 0 && matchesStateGroup) ||
+    (hasNonStateFilters && matchesNonStateGroup)
   );
 }
 
-function rowMatchesFilter(row: EncodingRow, filter: EncodingFilter) {
-  const text = row.original_char;
+function rowMatchesFilter(row: EncodingRow, filter: EncodingConditionFilter) {
+  const text = encodingCharacterToken(row.original_char);
   switch (filter) {
     case "duplicate_character":
       return duplicateCharacterIds.value.has(getRowIdentity(row));
     case "duplicate_code":
       return duplicateCodeIds.value.has(getRowIdentity(row));
     case "empty_character":
-      return row.original_char.trim() === "";
+      return encodingCharacterToken(row.original_char) === "";
     case "empty_code":
       return row.code.trim() === "";
     case "punctuation":
@@ -4588,6 +5556,89 @@ function restoreFallbackPrefs() {
   }
 }
 
+function defaultTextByteRules() {
+  return Object.fromEntries(
+    textByteCharacterTypes.map((type) => [type, { fixed: 1, mode: "encoding" }]),
+  ) as TextByteUsageSettings["byteRules"];
+}
+
+function defaultTextByteUsageSettings(side: "original" | "translated"): TextByteUsageSettings {
+  return {
+    activeStates: [side === "original" ? "original" : "translated"],
+    bracketTokenTypes: ["square", "curly", "angle"],
+    byteRules: defaultTextByteRules(),
+    useFixedFallback: true,
+  };
+}
+
+function restoreTextByteUsageSettings(side: "original" | "translated") {
+  const defaults = defaultTextByteUsageSettings(side);
+  try {
+    const rawSettings = window.localStorage.getItem(textByteSettingsStorageKey);
+    if (!rawSettings) return defaults;
+    const parsed = JSON.parse(rawSettings) as unknown;
+    if (!isRecord(parsed)) return defaults;
+    const storedSettings = parsed[side];
+    return normalizeTextByteUsageSettings(storedSettings, defaults);
+  } catch {
+    window.localStorage.removeItem(textByteSettingsStorageKey);
+    return defaults;
+  }
+}
+
+function normalizeTextByteUsageSettings(
+  value: unknown,
+  defaults: TextByteUsageSettings,
+): TextByteUsageSettings {
+  if (!isRecord(value)) return defaults;
+
+  const activeStates = Array.isArray(value.activeStates)
+    ? value.activeStates.filter(
+        (state): state is EncodingUsageState =>
+          state === "original" || state === "translated",
+      )
+    : [];
+  const bracketTokenTypes = Array.isArray(value.bracketTokenTypes)
+    ? value.bracketTokenTypes.filter(
+        (token): token is TextByteUsageSettings["bracketTokenTypes"][number] =>
+          token === "square" || token === "curly" || token === "angle",
+      )
+    : defaults.bracketTokenTypes;
+  const storedRules = isRecord(value.byteRules) ? value.byteRules : {};
+  const byteRules = Object.fromEntries(
+    textByteCharacterTypes.map((type) => {
+      const rawRule = storedRules[type];
+      const defaultRule = defaults.byteRules[type];
+      if (!isRecord(rawRule)) return [type, defaultRule];
+      const mode = rawRule.mode === "fixed" ? "fixed" : "encoding";
+      const fixed = typeof rawRule.fixed === "number" && Number.isFinite(rawRule.fixed)
+        ? Math.max(0, Math.floor(rawRule.fixed))
+        : defaultRule.fixed;
+      return [type, { fixed, mode }];
+    }),
+  ) as TextByteUsageSettings["byteRules"];
+
+  return {
+    activeStates: activeStates.length > 0 ? activeStates : defaults.activeStates,
+    bracketTokenTypes,
+    byteRules,
+    useFixedFallback:
+      typeof value.useFixedFallback === "boolean"
+        ? value.useFixedFallback
+        : defaults.useFixedFallback,
+  };
+}
+
+function persistTextByteSettings() {
+  window.localStorage.setItem(
+    textByteSettingsStorageKey,
+    JSON.stringify({
+      original: textByteOriginalSettings.value,
+      translated: textByteTranslatedSettings.value,
+    }),
+  );
+}
+
 function normalizeFallbackMode(value: unknown): CjkFallbackMode {
   return cjkFallbackOptions.some((option) => option.value === value)
     ? (value as CjkFallbackMode)
@@ -4613,6 +5664,27 @@ function restoreExportScope(storageKey: string): ExportScope {
 
 function persistExportScope(storageKey: string, scope: ExportScope) {
   window.localStorage.setItem(storageKey, scope);
+}
+
+function restoreEncodingUsageStates(storageKey: string): EncodingUsageState[] {
+  try {
+    const rawStates = window.localStorage.getItem(storageKey);
+    if (!rawStates) return [...encodingUsageStateOptions];
+    const parsed = JSON.parse(rawStates) as unknown;
+    if (!Array.isArray(parsed)) return [...encodingUsageStateOptions];
+    const states = parsed.filter(
+      (state): state is EncodingUsageState =>
+        state === "original" || state === "translated",
+    );
+    return states.length > 0 ? states : [...encodingUsageStateOptions];
+  } catch {
+    window.localStorage.removeItem(storageKey);
+    return [...encodingUsageStateOptions];
+  }
+}
+
+function persistEncodingUsageStates(storageKey: string, states: EncodingUsageState[]) {
+  window.localStorage.setItem(storageKey, JSON.stringify(states));
 }
 
 function restoreThemeMode(): ThemeMode {
@@ -4659,7 +5731,9 @@ function fontOptionLabel(mode: CjkFallbackMode) {
 }
 
 function encodingFilterLabel(filter: EncodingFilter) {
-  const labels: Record<EncodingFilter, string> = {
+  if (isEncodingStateFilter(filter)) return filter.state;
+
+  const labels: Record<EncodingConditionFilter, string> = {
     duplicate_character: t("encoding.duplicateCharacter"),
     duplicate_code: t("encoding.duplicateCode"),
     empty_character: t("encoding.emptyCharacter"),
@@ -4676,7 +5750,7 @@ function encodingFilterLabel(filter: EncodingFilter) {
 
 function emptyEncodingFilterCounts() {
   return Object.fromEntries(filterOptions.map((filter) => [filter, 0])) as Record<
-    EncodingFilter,
+    EncodingConditionFilter,
     number
   >;
 }
@@ -4741,6 +5815,12 @@ function restoreColumnOrder(): EncodingColumnKey[] {
       (key): key is EncodingColumnKey =>
         typeof key === "string" && knownKeys.has(key as EncodingColumnKey),
     );
+    if (!restored.includes("state")) {
+      const noteIndex = restored.indexOf("note");
+      if (noteIndex >= 0) {
+        restored.splice(noteIndex, 0, "state");
+      }
+    }
     return [
       "row_number",
       ...restored.filter((key) => key !== "row_number"),
@@ -4970,6 +6050,9 @@ function refreshDefaultCheckMessages() {
   if (defaultMessages.has(lineLengthMessage.value)) {
     lineLengthMessage.value = t("message.notCheckedYet");
   }
+  if (defaultMessages.has(textByteUsageMessage.value)) {
+    textByteUsageMessage.value = t("message.notCheckedYet");
+  }
 }
 
 </script>
@@ -5073,6 +6156,13 @@ function refreshDefaultCheckMessages() {
           >
             {{ t("main.copySelected") }} {{ selectedRowCount > 0 ? selectedRowCount : "" }}
           </button>
+          <button
+            type="button"
+            :disabled="selectedRowCount === 0"
+            @click="openBulkStateDialog"
+          >
+            {{ t("bulk.state") }} {{ selectedRowCount > 0 ? selectedRowCount : "" }}
+          </button>
         </div>
         <p class="encoding-file-status">{{ displayedJsonPath }}</p>
       </header>
@@ -5082,6 +6172,7 @@ function refreshDefaultCheckMessages() {
         v-model:search-text="searchText"
         v-model:is-case-sensitive-search="isCaseSensitiveSearch"
         v-model:selected-search-columns="selectedSearchColumns"
+        v-model:state-filter-join-mode="stateFilterJoinMode"
         v-model:filter-join-mode="filterJoinMode"
         v-model:row-filter-start="rowFilterStart"
         v-model:row-filter-end="rowFilterEnd"
@@ -5097,6 +6188,8 @@ function refreshDefaultCheckMessages() {
         :has-active-row-filter="hasActiveRowFilter"
         :rows-length="rows.length"
         :searchable-columns="searchableColumns"
+        :state-counts="encodingStateCounts"
+        :state-options="encodingStateOptions"
         @clear-filters="activeFilters = []"
         @clear-row-filter="clearRowFilter"
         @go-to-row="goToRow"
@@ -5126,6 +6219,7 @@ function refreshDefaultCheckMessages() {
           v-model:search-text="searchText"
           v-model:is-case-sensitive-search="isCaseSensitiveSearch"
           v-model:selected-search-columns="selectedSearchColumns"
+          v-model:state-filter-join-mode="stateFilterJoinMode"
           v-model:filter-join-mode="filterJoinMode"
           v-model:row-filter-start="rowFilterStart"
           v-model:row-filter-end="rowFilterEnd"
@@ -5141,6 +6235,8 @@ function refreshDefaultCheckMessages() {
           :has-active-row-filter="hasActiveRowFilter"
           :rows-length="rows.length"
           :searchable-columns="searchableColumns"
+          :state-counts="encodingStateCounts"
+          :state-options="encodingStateOptions"
           @clear-filters="activeFilters = []"
           @clear-row-filter="clearRowFilter"
           @go-to-row="goToRow"
@@ -5188,7 +6284,24 @@ function refreshDefaultCheckMessages() {
             class="header-content"
             @pointerdown="startColumnReorder(column.key, $event)"
           >
-            <span>{{ column.label }}</span>
+            <span
+              class="header-label"
+              :title="
+                column.key === 'row_number'
+                  ? `${t('common.selected')}: ${selectedRowCount}`
+                  : column.label
+              "
+              :aria-label="
+                column.key === 'row_number'
+                  ? `${column.label}, ${t('common.selected')}: ${selectedRowCount}`
+                  : column.label
+              "
+            >
+              {{ column.label }}
+              <template v-if="column.key === 'row_number' && selectedRowCount > 0">
+                · {{ selectedRowCount }}
+              </template>
+            </span>
             <div v-if="column.key === 'row_number'" class="header-row-actions">
               <input
                 class="row-select-checkbox"
@@ -5331,7 +6444,29 @@ function refreshDefaultCheckMessages() {
               @mousemove="handleTableCellMouseMove(rowIndex, column.key, $event)"
               @dblclick="handleTableCellDoubleClick(rowIndex, column.key, $event)"
             >
+              <select
+                v-if="column.key === 'state'"
+                v-model="row.state"
+                :aria-label="column.label"
+                :disabled="tableInteractionMode === 'select' && !isTableCellEditing(rowIndex, column.key)"
+                :tabindex="
+                  tableInteractionMode === 'select' && !isTableCellEditing(rowIndex, column.key)
+                    ? -1
+                    : 0
+                "
+                @focus="handleTableTextareaFocus(rowIndex, column.key, $event)"
+                @blur="exitTableCellEdit(false)"
+              >
+                <option
+                  v-for="option in encodingStateOptions"
+                  :key="option"
+                  :value="option"
+                >
+                  {{ option }}
+                </option>
+              </select>
               <textarea
+                v-else
                 v-model="row[column.key]"
                 :aria-label="column.label"
                 :autocapitalize="disablesTextCorrection(column.key) ? 'off' : undefined"
@@ -5382,6 +6517,15 @@ function refreshDefaultCheckMessages() {
       @confirm="confirmBulkColumnChange"
     />
 
+    <BulkStateDialog
+      v-if="isBulkStateDialogOpen"
+      v-model="bulkStateValue"
+      :selected-count="selectedRowCount"
+      :state-options="encodingStateOptions"
+      @close="closeBulkStateDialog"
+      @confirm="confirmBulkStateChange"
+    />
+
     <EncodingCodeShiftDialog
       v-if="isCodeShiftDialogOpen"
       v-model:column="codeShiftColumn"
@@ -5419,6 +6563,7 @@ function refreshDefaultCheckMessages() {
       v-model:character-types="characterStatsTypes"
       v-model:sort-order="characterStatsSortOrder"
       v-model:bracket-token-types="characterStatsBracketTokenTypes"
+      v-model:active-states="characterStatsEncodingStates"
       v-model:ignore-whitespace="characterStatsIgnoreWhitespace"
       :title="t('stats.characterCount')"
       always-show-progress
@@ -5429,8 +6574,10 @@ function refreshDefaultCheckMessages() {
       :result="characterStatsResult"
       :row-count-label="t('stats.encodingRows')"
       :row-count="characterStatsRowCount"
+      :state-options="encodingUsageStateOptions"
       :text-row-count="characterStatsTextRowCount"
       show-ignore-whitespace
+      show-state-filter
       show-text-scope
       @close="closeCharacterStatsDialog"
       @copy="copyCharacterStatsResult"
@@ -5444,6 +6591,7 @@ function refreshDefaultCheckMessages() {
       v-model:character-types="unmappedCharacterTypes"
       v-model:sort-order="unmappedSortOrder"
       v-model:bracket-token-types="unmappedBracketTokenTypes"
+      v-model:active-states="unmappedEncodingStates"
       v-model:ignore-whitespace="unmappedIgnoreWhitespace"
       :title="t('stats.unmappedCharacters')"
       :run-label="t('common.check')"
@@ -5454,7 +6602,10 @@ function refreshDefaultCheckMessages() {
       :progress-value="unmappedProgress"
       :result="unmappedResult"
       :row-count="unmappedRowCount"
+      :state-filter-label="t('stats.validMappedStates')"
+      :state-options="encodingUsageStateOptions"
       show-ignore-whitespace
+      show-state-filter
       @close="closeUnmappedCharactersDialog"
       @copy="copyUnmappedCharactersResult"
       @run="runUnmappedCharactersCheck"
@@ -5467,6 +6618,7 @@ function refreshDefaultCheckMessages() {
       v-model:character-types="unusedEncodingCharacterTypes"
       v-model:sort-order="unusedEncodingSortOrder"
       v-model:bracket-token-types="unusedEncodingBracketTokenTypes"
+      v-model:active-states="unusedEncodingStates"
       v-model:ignore-whitespace="unusedEncodingIgnoreWhitespace"
       :title="t('stats.unusedEncodings')"
       :run-label="t('common.check')"
@@ -5478,7 +6630,9 @@ function refreshDefaultCheckMessages() {
       :progress-value="unusedEncodingProgress"
       :result="unusedEncodingResult"
       :row-count="unusedEncodingTextRowCount"
+      :state-options="encodingUsageStateOptions"
       show-ignore-whitespace
+      show-state-filter
       @close="closeUnusedEncodingsDialog"
       @copy="copyUnusedEncodingsResult"
       @run="runUnusedEncodingsCheck"
@@ -5489,6 +6643,8 @@ function refreshDefaultCheckMessages() {
       v-model:scope="lineLengthScope"
       v-model:max-length="lineLengthMaxLength"
       v-model:bracket-token-types="lineLengthBracketTokenTypes"
+      v-model:active-states="lineLengthEncodingStates"
+      v-model:use-fixed-fallback="lineLengthUseFixedFallback"
       v-model:width-rules="lineLengthWidthRules"
       :can-copy="lineLengthResult !== ''"
       :is-running="isCheckingLineLength"
@@ -5496,9 +6652,37 @@ function refreshDefaultCheckMessages() {
       :progress-value="lineLengthProgress"
       :result="lineLengthResult"
       :row-count="lineLengthRowCount"
+      :state-options="encodingUsageStateOptions"
       @close="closeLineLengthDialog"
       @copy="copyLineLengthResult"
       @run="runLineLengthCheck"
+    />
+
+    <TextByteSettingsDialog
+      v-if="isTextByteSettingsDialogOpen"
+      v-model:original-settings="textByteOriginalSettings"
+      v-model:translated-settings="textByteTranslatedSettings"
+      :state-options="encodingUsageStateOptions"
+      @close="closeTextByteSettingsDialog"
+    />
+
+    <TextByteUsageDialog
+      v-if="isTextByteUsageDialogOpen"
+      v-model:scope="textByteUsageScope"
+      v-model:columns="textByteUsageColumns"
+      v-model:output-sections="textByteUsageOutputSections"
+      v-model:cell-over-bytes="textByteUsageCellOverBytes"
+      v-model:translated-over-original-bytes="textByteUsageTranslatedOverOriginalBytes"
+      v-model:translated-over-original-percent="textByteUsageTranslatedOverOriginalPercent"
+      :can-copy="textByteUsageResult !== ''"
+      :is-running="isCheckingTextByteUsage"
+      :message="textByteUsageMessage"
+      :progress-value="textByteUsageProgress"
+      :result="textByteUsageResult"
+      :row-count="textByteUsageRowCount"
+      @close="closeTextByteUsageDialog"
+      @copy="copyTextByteUsageResult"
+      @run="runTextByteUsageCheck"
     />
 
     <EncodingImportDialog
@@ -5523,6 +6707,7 @@ function refreshDefaultCheckMessages() {
       v-model:char-column="excelImportCharColumn"
       v-model:code-column="excelImportCodeColumn"
       v-model:width-column="excelImportWidthColumn"
+      v-model:state-column="excelImportStateColumn"
       v-model:note-column="excelImportNoteColumn"
       v-model:append-rows="excelImportAppendRows"
       :can-import="canImportExcel"
@@ -5538,6 +6723,7 @@ function refreshDefaultCheckMessages() {
       v-if="isExportDialogOpen"
       v-model:path="exportPath"
       v-model:scope="exportScope"
+      v-model:active-states="exportStates"
       v-model:extension="exportExtension"
       v-model:direction="exportDirection"
       v-model:newline="exportNewline"
@@ -5547,6 +6733,7 @@ function refreshDefaultCheckMessages() {
       :is-exporting="isExportingText"
       :message="displayedMessage"
       :row-count="exportRowCount"
+      :state-options="encodingUsageStateOptions"
       @browse="browseExportPath"
       @close="closeExportDialog"
       @confirm="confirmExportText"
@@ -5556,11 +6743,13 @@ function refreshDefaultCheckMessages() {
       v-if="isExcelExportDialogOpen"
       v-model:path="excelExportPath"
       v-model:scope="excelExportScope"
+      v-model:active-states="excelExportStates"
       :can-export="canExportExcel"
       :is-error="errorMessage !== ''"
       :is-exporting="isExportingExcel"
       :message="displayedMessage"
       :row-count="excelExportRowCount"
+      :state-options="encodingUsageStateOptions"
       @browse="browseExcelExportPath"
       @close="closeExcelExportDialog"
       @confirm="confirmExcelExport"
@@ -6295,6 +7484,12 @@ button {
   box-shadow: inset 0 0 0 2px var(--success);
 }
 
+.header-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .header-row-actions {
   display: flex;
   gap: 6px;
@@ -6434,14 +7629,18 @@ button {
   -webkit-user-select: none;
 }
 
-.table-select-mode .textarea-cell > textarea {
+.table-select-mode .textarea-cell > textarea,
+.table-select-mode .textarea-cell > select {
   cursor: cell;
+  pointer-events: none;
   user-select: none;
   -webkit-user-select: none;
 }
 
-.table-select-mode .textarea-cell.table-cell-editing > textarea {
+.table-select-mode .textarea-cell.table-cell-editing > textarea,
+.table-select-mode .textarea-cell.table-cell-editing > select {
   cursor: text;
+  pointer-events: auto;
   user-select: text;
   -webkit-user-select: text;
 }
@@ -6516,6 +7715,7 @@ button {
 }
 
 .textarea-cell > textarea,
+.textarea-cell > select,
 .textarea-measure {
   box-sizing: border-box;
   width: 100%;
@@ -6526,7 +7726,8 @@ button {
   overflow-wrap: anywhere;
 }
 
-.textarea-cell > textarea {
+.textarea-cell > textarea,
+.textarea-cell > select {
   position: absolute;
   inset: 0;
   width: auto;
@@ -6539,13 +7740,15 @@ button {
   background: transparent;
 }
 
-.textarea-cell > textarea:focus {
+.textarea-cell > textarea:focus,
+.textarea-cell > select:focus {
   z-index: 3;
   outline: none;
   box-shadow: inset 0 0 0 2px var(--primary);
 }
 
-.table-select-mode .textarea-cell.table-cell-editing > textarea:focus {
+.table-select-mode .textarea-cell.table-cell-editing > textarea:focus,
+.table-select-mode .textarea-cell.table-cell-editing > select:focus {
   box-shadow: inset 0 0 0 2px var(--success);
 }
 

@@ -1,14 +1,13 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted } from "vue";
-import type { StateValue } from "../types";
 import { t } from "../i18n";
 
 defineProps<{
   selectedCount: number;
-  stateOptions: StateValue[];
+  stateOptions: string[];
 }>();
 
-const state = defineModel<StateValue>({ required: true });
+const state = defineModel<string>({ required: true });
 
 const emit = defineEmits<{
   close: [];

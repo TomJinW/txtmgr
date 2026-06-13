@@ -127,7 +127,7 @@ export async function readXlsxWorkbook(bytes: Uint8Array) {
     const target = relationshipId ? relTargets.get(relationshipId) : null;
     if (!target) continue;
 
-    const sheetXml = zipText(zipFiles, normalizeZipPath(`xl/${target}`));
+    const sheetXml = zipText(zipFiles, workbookRelationshipTargetPath(target));
     importedSheets.push({
       name: sheet.getAttribute("name") || `Sheet${importedSheets.length + 1}`,
       rows: parseWorksheetRows(sheetXml, sharedStrings),
@@ -197,8 +197,8 @@ function xlsxEncodingWorksheetXml(
   exportRows: { row: EncodingRow; index: number }[],
   columnWidths: number[],
 ) {
-  const columnKeys = ["row_number", "char", "code", "width", "note"] as const;
-  const headerRow = xlsxRowXml(1, ["#", "char", "code", "width", "note"], 1);
+  const columnKeys = ["row_number", "char", "code", "width", "state", "note"] as const;
+  const headerRow = xlsxRowXml(1, ["#", "char", "code", "width", "state", "note"], 1);
   const dataRows = exportRows
     .map(({ row, index }, rowOffset) =>
       xlsxRowXml(
@@ -208,6 +208,7 @@ function xlsxEncodingWorksheetXml(
           row.original_char,
           row.code,
           row.width,
+          row.state,
           row.note,
         ],
         2,
@@ -477,6 +478,15 @@ function normalizeZipPath(path: string) {
   }
 
   return parts.join("/");
+}
+
+function workbookRelationshipTargetPath(target: string) {
+  // Relationship targets are normally relative to xl/workbook.xml, but some
+  // producers write absolute package paths such as /xl/worksheets/sheet1.xml.
+  const normalizedTarget = target.replace(/\\/g, "/");
+  return normalizedTarget.startsWith("/")
+    ? normalizeZipPath(normalizedTarget.slice(1))
+    : normalizeZipPath(`xl/${normalizedTarget}`);
 }
 
 function parseXml(xml: string) {

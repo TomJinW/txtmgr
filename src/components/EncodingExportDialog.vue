@@ -9,6 +9,7 @@ defineProps<{
   isExporting: boolean;
   message?: string;
   rowCount: number;
+  stateOptions: string[];
 }>();
 
 const emit = defineEmits<{
@@ -19,6 +20,7 @@ const emit = defineEmits<{
 
 const path = defineModel<string>("path", { required: true });
 const scope = defineModel<ExportScope>("scope", { required: true });
+const activeStates = defineModel<string[]>("activeStates", { required: true });
 const extension = defineModel<"txt" | "tbl">("extension", { required: true });
 const direction = defineModel<"code_char" | "char_code">("direction", {
   required: true,
@@ -38,6 +40,21 @@ watch(
   },
   { immediate: true },
 );
+
+function toggleState(state: string) {
+  const states = new Set(activeStates.value);
+  if (states.has(state)) {
+    if (states.size <= 1) return;
+    states.delete(state);
+  } else {
+    states.add(state);
+  }
+  activeStates.value = Array.from(states);
+}
+
+function isStateActive(state: string) {
+  return activeStates.value.includes(state);
+}
 </script>
 
 <template>
@@ -81,6 +98,23 @@ watch(
             <option value="selected">{{ t("dialog.scopeSelectedRows") }}</option>
           </select>
         </label>
+
+        <fieldset class="state-options">
+          <legend>{{ t("dialog.exportStateUsage") }}</legend>
+          <div class="choice-button-group">
+            <button
+              v-for="state in stateOptions"
+              :key="state"
+              type="button"
+              class="choice-button"
+              :class="{ active: isStateActive(state) }"
+              :aria-pressed="isStateActive(state)"
+              @click="toggleState(state)"
+            >
+              {{ state }}
+            </button>
+          </div>
+        </fieldset>
 
         <label>
           <span>{{ t("dialog.extension") }}</span>
@@ -232,6 +266,43 @@ watch(
 .export-options {
   display: grid;
   gap: 10px;
+}
+
+.state-options {
+  margin: 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 7px 9px;
+}
+
+.state-options legend {
+  padding: 0 4px;
+  color: var(--text-soft);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.choice-button-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  align-items: center;
+}
+
+.choice-button {
+  min-height: 28px;
+  border: 1px solid var(--control-border);
+  border-radius: 6px;
+  padding: 4px 10px;
+  color: var(--control-text);
+  background: var(--panel-bg);
+  font-size: 13px;
+}
+
+.choice-button.active {
+  border-color: var(--primary-hover);
+  color: var(--on-accent);
+  background: var(--primary);
 }
 
 .export-summary {

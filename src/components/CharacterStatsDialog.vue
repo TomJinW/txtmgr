@@ -15,6 +15,9 @@ const props = withDefaults(defineProps<{
   rowCountLabel?: string;
   runLabel?: string;
   showIgnoreWhitespace?: boolean;
+  showStateFilter?: boolean;
+  stateFilterLabel?: string;
+  stateOptions?: string[];
   showTextScope?: boolean;
   textRowCount?: number;
   title?: string;
@@ -23,6 +26,8 @@ const props = withDefaults(defineProps<{
   isRunning: false,
   progressValue: 0,
   showIgnoreWhitespace: false,
+  showStateFilter: false,
+  stateOptions: () => [],
   showTextScope: false,
   textRowCount: 0,
 });
@@ -59,11 +64,15 @@ const bracketTokenTypes = defineModel<("square" | "curly" | "angle")[]>(
   "bracketTokenTypes",
   { required: true },
 );
+const activeStates = defineModel<string[]>("activeStates", { default: [] });
 const ignoreWhitespace = defineModel<boolean>("ignoreWhitespace", { default: true });
 const resultBox = ref<HTMLTextAreaElement | null>(null);
 const displayTitle = computed(() => props.title ?? t("stats.characterCount"));
 const displayRowCountLabel = computed(() => props.rowCountLabel ?? t("stats.rowsCounted"));
 const displayRunLabel = computed(() => props.runLabel ?? t("stats.run"));
+const displayStateFilterLabel = computed(
+  () => props.stateFilterLabel ?? t("stats.validEncodingStates"),
+);
 const isAllCharactersActive = computed(
   () => includeAllCharacters.value || characterTypes.value.length === 0,
 );
@@ -122,6 +131,21 @@ function setCharacterType(type: CharacterType, checked: boolean) {
 function isCharacterTypeActive(type: CharacterType) {
   return !isAllCharactersActive.value && characterTypes.value.includes(type);
 }
+
+function toggleStateActive(state: string) {
+  const selectedStates = new Set(activeStates.value);
+  if (selectedStates.has(state)) {
+    if (selectedStates.size <= 1 && selectedStates.has(state)) return;
+    selectedStates.delete(state);
+  } else {
+    selectedStates.add(state);
+  }
+  activeStates.value = Array.from(selectedStates);
+}
+
+function isStateActive(state: string) {
+  return activeStates.value.includes(state);
+}
 </script>
 
 <template>
@@ -164,6 +188,7 @@ function isCharacterTypeActive(type: CharacterType) {
       <div class="character-stats-summary">
         <span>{{ displayRowCountLabel }}: {{ rowCount }}</span>
         <span v-if="showTextScope">{{ t("stats.textRows") }}: {{ textRowCount }}</span>
+        <span>{{ t("stats.targetTranslatedText") }}</span>
       </div>
 
       <fieldset class="option-group">
@@ -191,6 +216,23 @@ function isCharacterTypeActive(type: CharacterType) {
             />
             {{ t(option.labelKey) }}
           </label>
+        </div>
+      </fieldset>
+
+      <fieldset v-if="showStateFilter && stateOptions.length > 0" class="option-group">
+        <legend>{{ displayStateFilterLabel }} ({{ t("stats.stateBothShort") }})</legend>
+        <div class="choice-button-group">
+          <button
+            v-for="state in stateOptions"
+            :key="state"
+            type="button"
+            class="choice-button"
+            :class="{ active: isStateActive(state) }"
+            :aria-pressed="isStateActive(state)"
+            @click="toggleStateActive(state)"
+          >
+            {{ state }}
+          </button>
         </div>
       </fieldset>
 
@@ -304,11 +346,12 @@ function isCharacterTypeActive(type: CharacterType) {
 .character-stats-summary {
   display: flex;
   flex-wrap: wrap;
-  gap: 10px 18px;
+  gap: 8px 16px;
   align-items: center;
-  margin-top: 12px;
+  margin-top: 7px;
   color: var(--text-soft);
   font-size: 12px;
+  line-height: 1.25;
 }
 
 .checkbox-line {

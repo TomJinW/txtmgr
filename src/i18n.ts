@@ -150,6 +150,7 @@ type TranslationKey =
   | "dialog.outputEncoding"
   | "dialog.filteredOnly"
   | "dialog.exportScope"
+  | "dialog.exportStateUsage"
   | "dialog.scopeAllRows"
   | "dialog.scopeFilteredRows"
   | "dialog.scopeSelectedRows"
@@ -170,6 +171,7 @@ type TranslationKey =
   | "dialog.charColumnOptional"
   | "dialog.codeColumnOptional"
   | "dialog.widthColumnOptional"
+  | "dialog.stateColumnOptional"
   | "dialog.noteColumnOptional"
   | "dialog.optional"
   | "dialog.required"
@@ -219,6 +221,7 @@ type TranslationKey =
   | "message.copiedSelectedRows"
   | "message.copiedSelectedCells"
   | "message.pastedCells"
+  | "message.unrecognizedPastedStates"
   | "message.clipboardReadUnavailable"
   | "message.noPasteTarget"
   | "message.tableEditMode"
@@ -412,6 +415,10 @@ type TranslationKey =
   | "stats.ignoreWhitespace"
   | "stats.rows"
   | "stats.encodingRows"
+  | "stats.validEncodingStates"
+  | "stats.validMappedStates"
+  | "stats.stateBothShort"
+  | "stats.allStates"
   | "stats.textRows"
   | "stats.rowsCounted"
   | "stats.allRows"
@@ -443,11 +450,13 @@ type TranslationKey =
   | "stats.checkingLineLength"
   | "stats.noOverlongNaturalLinesFound"
   | "stats.foundOverlongNaturalLines"
+  | "stats.foundLineLengthIssues"
   | "stats.lineLengthResultCopied"
   | "stats.failedCopyLineLengthResult"
   | "stats.unmappedCharacters"
   | "stats.unusedEncodings"
   | "stats.textRowsScanned"
+  | "stats.targetTranslatedText"
   | "lineLength.title"
   | "lineLength.maxLength"
   | "lineLength.widthRules"
@@ -457,7 +466,41 @@ type TranslationKey =
   | "lineLength.encodingWidth"
   | "lineLength.fixedValue"
   | "lineLength.other"
+  | "lineLength.useFixedFallback"
   | "lineLength.help"
+  | "textByte.title"
+  | "textByte.help"
+  | "textByte.originalText"
+  | "textByte.translatedText"
+  | "textByte.useFixedFallback"
+  | "textByte.byteRules"
+  | "textByte.encodingCodeBytes"
+  | "textByte.fixedBytes"
+  | "textByte.fixedFallbackBytes"
+  | "textByte.newline"
+  | "textByte.savedAutomatically"
+  | "textByteUsage.title"
+  | "textByteUsage.help"
+  | "textByteUsage.columns"
+  | "textByteUsage.original"
+  | "textByteUsage.translated"
+  | "textByteUsage.outputContent"
+  | "textByteUsage.outputSummary"
+  | "textByteUsage.outputRowSummary"
+  | "textByteUsage.outputCellDetails"
+  | "textByteUsage.outputFailures"
+  | "textByteUsage.thresholds"
+  | "textByteUsage.cellOverBytes"
+  | "textByteUsage.translatedOverOriginalBytes"
+  | "textByteUsage.translatedOverOriginalPercent"
+  | "textByteUsage.zeroDisables"
+  | "textByteUsage.checking"
+  | "textByteUsage.resultCopied"
+  | "textByteUsage.failedCopyResult"
+  | "textByteUsage.details"
+  | "textByteUsage.noDetails"
+  | "textByteUsage.foundDetails"
+  | "textByteUsage.summaryGenerated"
   | "bulk.title"
   | "bulk.state"
   | "bulk.selectedRows"
@@ -614,6 +657,7 @@ const translations: Record<AppLanguage, Record<TranslationKey, string>> = {
     "dialog.outputEncoding": "Output encoding",
     "dialog.filteredOnly": "Export current filtered results",
     "dialog.exportScope": "Rows to export",
+    "dialog.exportStateUsage": "Export state (state 'both' matches either)",
     "dialog.scopeAllRows": "All rows",
     "dialog.scopeFilteredRows": "Filtered rows",
     "dialog.scopeSelectedRows": "Selected rows",
@@ -628,12 +672,13 @@ const translations: Record<AppLanguage, Record<TranslationKey, string>> = {
     "dialog.autoDetect": "Auto detect",
     "dialog.extension": "Extension",
     "dialog.newline": "Newline",
-    "dialog.exportTblWarning": "Only char and code are exported. Width and note are not saved.",
+    "dialog.exportTblWarning": "Only char and code are exported. Width, state, and note are not saved.",
     "dialog.charColumnRequired": "char column (required)",
     "dialog.codeColumnRequired": "code column (required)",
     "dialog.charColumnOptional": "char column (optional, leave blank to skip)",
     "dialog.codeColumnOptional": "code column (optional, leave blank to skip)",
     "dialog.widthColumnOptional": "width column (optional, leave blank to skip)",
+    "dialog.stateColumnOptional": "state column (optional, leave blank to use both)",
     "dialog.noteColumnOptional": "note column (optional, leave blank to skip)",
     "dialog.optional": "Optional",
     "dialog.required": "required",
@@ -683,6 +728,7 @@ const translations: Record<AppLanguage, Record<TranslationKey, string>> = {
     "message.copiedSelectedRows": "Copied selected rows",
     "message.copiedSelectedCells": "Copied selected cells",
     "message.pastedCells": "Pasted cells",
+    "message.unrecognizedPastedStates": "Unrecognized pasted state cells",
     "message.clipboardReadUnavailable": "Clipboard read is unavailable.",
     "message.noPasteTarget": "Select a table cell before pasting as table.",
     "message.tableEditMode": "Table edit mode. Press T while not editing text to switch interaction mode.",
@@ -876,6 +922,10 @@ const translations: Record<AppLanguage, Record<TranslationKey, string>> = {
     "stats.ignoreWhitespace": "Ignore whitespace",
     "stats.rows": "Rows",
     "stats.encodingRows": "Encoding rows",
+    "stats.validEncodingStates": "Valid encoding states",
+    "stats.validMappedStates": "States counted as mapped",
+    "stats.stateBothShort": "state 'both' = either",
+    "stats.allStates": "All states",
     "stats.textRows": "Text rows",
     "stats.rowsCounted": "Rows counted",
     "stats.allRows": "All rows",
@@ -907,11 +957,13 @@ const translations: Record<AppLanguage, Record<TranslationKey, string>> = {
     "stats.checkingLineLength": "Checking line length...",
     "stats.noOverlongNaturalLinesFound": "No overlong natural lines found",
     "stats.foundOverlongNaturalLines": "Found overlong natural lines",
+    "stats.foundLineLengthIssues": "Found line length issues",
     "stats.lineLengthResultCopied": "Line length result copied.",
     "stats.failedCopyLineLengthResult": "Failed to copy line length result.",
     "stats.unmappedCharacters": "Unmapped Characters",
     "stats.unusedEncodings": "Unused Encodings",
     "stats.textRowsScanned": "Text rows scanned",
+    "stats.targetTranslatedText": "This check reads translated_text from the main table.",
     "lineLength.title": "Line Length Check",
     "lineLength.maxLength": "Max length",
     "lineLength.widthRules": "Width rules",
@@ -921,7 +973,41 @@ const translations: Record<AppLanguage, Record<TranslationKey, string>> = {
     "lineLength.encodingWidth": "Encoding width",
     "lineLength.fixedValue": "Fixed value",
     "lineLength.other": "Others",
-    "lineLength.help": "Encoding width uses the width value from the Encoding Manager char table. Fixed value always uses the number below. When Encoding width is selected, the same number is used as the fallback if a token is missing from the table or has no valid width.",
+    "lineLength.useFixedFallback": "Use fixed value as fallback when Encoding width is missing",
+    "lineLength.help": "Encoding width uses the width value from the Encoding Manager char table. Fixed value always uses the number below. If fallback is disabled, a line fails when any token is missing from the table or has no valid width.",
+    "textByte.title": "Text Byte Usage Settings",
+    "textByte.help": "Configure how future byte usage checks calculate original_text and translated_text. Encoding code bytes use the hex code length from the Encoding Manager char table; fixed bytes always use the number below.",
+    "textByte.originalText": "Original text settings",
+    "textByte.translatedText": "Translated text settings",
+    "textByte.useFixedFallback": "Use fixed bytes as fallback when Encoding code is missing",
+    "textByte.byteRules": "Byte rules",
+    "textByte.encodingCodeBytes": "Encoding code bytes",
+    "textByte.fixedBytes": "Fixed bytes",
+    "textByte.fixedFallbackBytes": "Fixed / fallback bytes",
+    "textByte.newline": "Newline code = \\n",
+    "textByte.savedAutomatically": "Settings are saved automatically.",
+    "textByteUsage.title": "Text Byte Usage",
+    "textByteUsage.help": "Uses Text Byte Usage Settings to calculate original_text and translated_text byte usage.",
+    "textByteUsage.columns": "Columns",
+    "textByteUsage.original": "original_text",
+    "textByteUsage.translated": "translated_text",
+    "textByteUsage.outputContent": "Output content",
+    "textByteUsage.outputSummary": "Summary",
+    "textByteUsage.outputRowSummary": "Row summary",
+    "textByteUsage.outputCellDetails": "Cell details",
+    "textByteUsage.outputFailures": "Failed cells",
+    "textByteUsage.thresholds": "Detail filters",
+    "textByteUsage.cellOverBytes": "Cell over bytes",
+    "textByteUsage.translatedOverOriginalBytes": "Translated over original by bytes",
+    "textByteUsage.translatedOverOriginalPercent": "Translated / original over %",
+    "textByteUsage.zeroDisables": "0 disables a detail filter.",
+    "textByteUsage.checking": "Checking text byte usage...",
+    "textByteUsage.resultCopied": "Text byte usage result copied.",
+    "textByteUsage.failedCopyResult": "Failed to copy text byte usage result.",
+    "textByteUsage.details": "Details",
+    "textByteUsage.noDetails": "No detail rows matched",
+    "textByteUsage.foundDetails": "Detail rows",
+    "textByteUsage.summaryGenerated": "Summary generated",
     "bulk.title": "Change Selected State",
     "bulk.state": "State",
     "bulk.selectedRows": "Selected rows",
@@ -1077,6 +1163,7 @@ const translations: Record<AppLanguage, Record<TranslationKey, string>> = {
     "dialog.outputEncoding": "输出编码",
     "dialog.filteredOnly": "只导出当前过滤结果",
     "dialog.exportScope": "导出范围",
+    "dialog.exportStateUsage": "导出 state（state 'both' 会匹配任意一项）",
     "dialog.scopeAllRows": "全部行",
     "dialog.scopeFilteredRows": "过滤行",
     "dialog.scopeSelectedRows": "选中行",
@@ -1091,12 +1178,13 @@ const translations: Record<AppLanguage, Record<TranslationKey, string>> = {
     "dialog.autoDetect": "自动检测",
     "dialog.extension": "扩展名",
     "dialog.newline": "换行符",
-    "dialog.exportTblWarning": "只导出 char 和 code。width 与 note 不会保存。",
+    "dialog.exportTblWarning": "只导出 char 和 code。width、state 与 note 不会保存。",
     "dialog.charColumnRequired": "char 列（必填）",
     "dialog.codeColumnRequired": "code 列（必填）",
     "dialog.charColumnOptional": "char 列（可选，留空跳过）",
     "dialog.codeColumnOptional": "code 列（可选，留空跳过）",
     "dialog.widthColumnOptional": "width 列（可选，留空跳过）",
+    "dialog.stateColumnOptional": "state 列（可选，留空则使用 both）",
     "dialog.noteColumnOptional": "note 列（可选，留空跳过）",
     "dialog.optional": "可选",
     "dialog.required": "必填",
@@ -1146,6 +1234,7 @@ const translations: Record<AppLanguage, Record<TranslationKey, string>> = {
     "message.copiedSelectedRows": "已复制选中行",
     "message.copiedSelectedCells": "已复制选中单元格",
     "message.pastedCells": "已粘贴单元格",
+    "message.unrecognizedPastedStates": "无法识别的粘贴 state 单元格",
     "message.clipboardReadUnavailable": "无法读取剪贴板。",
     "message.noPasteTarget": "请先选中一个表格单元格，再粘贴为表格。",
     "message.tableEditMode": "表格编辑模式。非编辑文本状态下按 T 切换交互模式。",
@@ -1339,6 +1428,10 @@ const translations: Record<AppLanguage, Record<TranslationKey, string>> = {
     "stats.ignoreWhitespace": "忽略空白字符",
     "stats.rows": "行",
     "stats.encodingRows": "Encoding 行",
+    "stats.validEncodingStates": "有效 Encoding state",
+    "stats.validMappedStates": "算作已映射的 state",
+    "stats.stateBothShort": "both = 任意一项",
+    "stats.allStates": "全部 state",
     "stats.textRows": "文本行",
     "stats.rowsCounted": "统计行数",
     "stats.allRows": "全部行",
@@ -1370,11 +1463,13 @@ const translations: Record<AppLanguage, Record<TranslationKey, string>> = {
     "stats.checkingLineLength": "正在检查自然行长度...",
     "stats.noOverlongNaturalLinesFound": "没有找到超长自然行",
     "stats.foundOverlongNaturalLines": "找到超长自然行",
+    "stats.foundLineLengthIssues": "找到自然行长度问题",
     "stats.lineLengthResultCopied": "自然行长度检查结果已复制。",
     "stats.failedCopyLineLengthResult": "复制自然行长度检查结果失败。",
     "stats.unmappedCharacters": "未映射字符",
     "stats.unusedEncodings": "未使用编码",
     "stats.textRowsScanned": "扫描文本行数",
+    "stats.targetTranslatedText": "这个检查会读取主窗口的 translated_text。",
     "lineLength.title": "自然行长度检查",
     "lineLength.maxLength": "最大长度",
     "lineLength.widthRules": "宽度规则",
@@ -1384,7 +1479,41 @@ const translations: Record<AppLanguage, Record<TranslationKey, string>> = {
     "lineLength.encodingWidth": "Encoding width",
     "lineLength.fixedValue": "固定值",
     "lineLength.other": "其他",
-    "lineLength.help": "Encoding width 会使用码表管理器里该字符的 width。Fixed value 会始终使用下面填写的数字。选择 Encoding width 时，如果 token 在码表中不存在或没有有效 width，同一个数字会作为 fallback 使用。",
+    "lineLength.useFixedFallback": "Encoding width 缺失时使用固定值作为 fallback",
+    "lineLength.help": "Encoding width 会使用码表管理器里该字符的 width。Fixed value 会始终使用下面填写的数字。如果关闭 fallback，只要某个 token 不在码表中或没有有效 width，这一自然行就会检查失败。",
+    "textByte.title": "文本字节统计设置",
+    "textByte.help": "设置未来字节占用检查如何分别计算 original_text 和 translated_text。Encoding code bytes 会使用码表管理器中 16 进制 code 的字节长度；Fixed bytes 会始终使用下面填写的数字。",
+    "textByte.originalText": "原文设置",
+    "textByte.translatedText": "译文设置",
+    "textByte.useFixedFallback": "Encoding code 缺失时使用固定字节数作为 fallback",
+    "textByte.byteRules": "字节规则",
+    "textByte.encodingCodeBytes": "Encoding code 字节数",
+    "textByte.fixedBytes": "固定字节数",
+    "textByte.fixedFallbackBytes": "固定 / fallback 字节数",
+    "textByte.newline": "换行符 code = \\n",
+    "textByte.savedAutomatically": "设置会自动保存。",
+    "textByteUsage.title": "文本字节占用",
+    "textByteUsage.help": "使用文本字节统计设置来计算 original_text 和 translated_text 的字节占用。",
+    "textByteUsage.columns": "统计列",
+    "textByteUsage.original": "original_text",
+    "textByteUsage.translated": "translated_text",
+    "textByteUsage.outputContent": "输出内容",
+    "textByteUsage.outputSummary": "概要",
+    "textByteUsage.outputRowSummary": "每行汇总",
+    "textByteUsage.outputCellDetails": "单元格明细",
+    "textByteUsage.outputFailures": "失败单元格",
+    "textByteUsage.thresholds": "明细过滤",
+    "textByteUsage.cellOverBytes": "单元格超过字节数",
+    "textByteUsage.translatedOverOriginalBytes": "译文比原文多出字节数",
+    "textByteUsage.translatedOverOriginalPercent": "译文 / 原文超过 %",
+    "textByteUsage.zeroDisables": "填 0 表示不启用该明细过滤。",
+    "textByteUsage.checking": "正在检查文本字节占用...",
+    "textByteUsage.resultCopied": "文本字节占用结果已复制。",
+    "textByteUsage.failedCopyResult": "复制文本字节占用结果失败。",
+    "textByteUsage.details": "明细",
+    "textByteUsage.noDetails": "没有匹配的明细行",
+    "textByteUsage.foundDetails": "明细行数",
+    "textByteUsage.summaryGenerated": "已生成概要",
     "bulk.title": "批量修改状态",
     "bulk.state": "状态",
     "bulk.selectedRows": "选中行数",

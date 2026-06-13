@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { nextTick, ref } from "vue";
 import { t } from "../i18n";
-import type { EncodingRow } from "../types";
+import type { EncodingRow, EncodingStateValue } from "../types";
 
-type EncodingFilter =
+type EncodingStateFilter = { type: "state"; state: EncodingStateValue };
+type EncodingConditionFilter =
   | "duplicate_character"
   | "duplicate_code"
   | "empty_character"
@@ -14,19 +15,22 @@ type EncodingFilter =
   | "hangul"
   | "latin"
   | "special";
+type EncodingFilter = EncodingStateFilter | EncodingConditionFilter;
 
-defineProps<{
+const props = defineProps<{
   activeFilters: EncodingFilter[];
   displayedMessage: string;
   errorMessage: string;
-  filterCounts: Record<EncodingFilter, number>;
+  filterCounts: Record<EncodingConditionFilter, number>;
   filterLabel: (filter: EncodingFilter) => string;
-  filterOptions: EncodingFilter[];
+  filterOptions: EncodingConditionFilter[];
   filteredRowsLength: number;
   goToMaxRow?: number;
   hasActiveRowFilter: boolean;
   rowsLength: number;
   searchableColumns: (keyof EncodingRow)[];
+  stateCounts: Record<EncodingStateValue, number>;
+  stateOptions: EncodingStateValue[];
 }>();
 
 const emit = defineEmits<{
@@ -47,12 +51,15 @@ const selectedSearchColumns = defineModel<(keyof EncodingRow)[]>("selectedSearch
 const filterJoinMode = defineModel<"or" | "and">("filterJoinMode", {
   required: true,
 });
+const stateFilterJoinMode = defineModel<"or" | "and">("stateFilterJoinMode", {
+  required: true,
+});
 const rowFilterStart = defineModel<string>("rowFilterStart", { required: true });
 const rowFilterEnd = defineModel<string>("rowFilterEnd", { required: true });
 const goToRowValue = defineModel<string>("goToRowValue", { required: true });
 
 const searchInput = ref<HTMLInputElement | null>(null);
-const characterTypeFilters: EncodingFilter[] = [
+const characterTypeFilters: EncodingConditionFilter[] = [
   "punctuation",
   "han",
   "kana",
@@ -60,12 +67,21 @@ const characterTypeFilters: EncodingFilter[] = [
   "latin",
   "special",
 ];
-const conditionFilters: EncodingFilter[] = [
+const conditionFilters: EncodingConditionFilter[] = [
   "duplicate_character",
   "duplicate_code",
   "empty_character",
   "empty_code",
 ];
+
+function filterKey(filter: EncodingFilter) {
+  return typeof filter === "string" ? filter : `state:${filter.state}`;
+}
+
+function isFilterActive(filter: EncodingFilter) {
+  const key = filterKey(filter);
+  return props.activeFilters.some((activeFilter) => filterKey(activeFilter) === key);
+}
 
 function focusSearchInput() {
   nextTick(() => {
@@ -124,10 +140,26 @@ defineExpose({ focusSearchInput });
           {{ t("common.all") }} {{ rowsLength }}
         </button>
         <button
+          v-for="state in stateOptions"
+          :key="state"
+          type="button"
+          :class="{ active: isFilterActive({ type: 'state', state }) }"
+          @click="emit('toggleFilter', { type: 'state', state })"
+        >
+          {{ state }} {{ stateCounts[state] }}
+        </button>
+        <label class="stat-join-control" :title="t('main.statFilterJoinHint')">
+          <span>{{ t("main.statFilterJoin") }}</span>
+          <select v-model="stateFilterJoinMode" aria-label="Encoding state filter relation">
+            <option value="and">{{ t("main.filterAnd") }}</option>
+            <option value="or">{{ t("main.filterOr") }}</option>
+          </select>
+        </label>
+        <button
           v-for="filter in characterTypeFilters.filter((filter) => filterOptions.includes(filter))"
           :key="filter"
           type="button"
-          :class="{ active: activeFilters.includes(filter) }"
+          :class="{ active: isFilterActive(filter) }"
           @click="emit('toggleFilter', filter)"
         >
           {{ filterLabel(filter) }} {{ filterCounts[filter] }}
@@ -143,7 +175,7 @@ defineExpose({ focusSearchInput });
           v-for="filter in conditionFilters.filter((filter) => filterOptions.includes(filter))"
           :key="filter"
           type="button"
-          :class="{ active: activeFilters.includes(filter) }"
+          :class="{ active: isFilterActive(filter) }"
           @click="emit('toggleFilter', filter)"
         >
           {{ filterLabel(filter) }} {{ filterCounts[filter] }}

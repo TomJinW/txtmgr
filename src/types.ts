@@ -20,14 +20,17 @@ export type SentenceRow = {
   ai_output: string;
 };
 
-// EncodingRow is intentionally small: export-to-TBL only uses char/code, while
-// width/note are helper metadata for checks and editing.
+// EncodingRow is intentionally small: export-to-TBL uses char/code only, while
+// state/width/note drive coverage, byte, and line-length checks inside the app.
 export type EncodingRow = {
   original_char: string;
   code: string;
   width: string;
+  state: EncodingStateValue;
   note: string;
 };
+
+export type EncodingStateValue = "original" | "translated" | "both";
 
 // Input files historically wrap fields in a Sentence object; parsing code keeps
 // accepting partial rows so older or hand-edited JSON can still load.

@@ -21,7 +21,7 @@ export type LineLengthWidthRule = {
 };
 
 // Each character class can use Encoding Manager width metadata or a fixed value.
-// The fixed value also acts as fallback when encoding width is missing.
+// The fixed value can optionally act as fallback when encoding width is missing.
 const characterTypeOptions: { labelKey: Parameters<typeof t>[0]; value: LineLengthCharacterType }[] = [
   { labelKey: "stats.western", value: "western" },
   { labelKey: "encoding.han", value: "han" },
@@ -41,8 +41,10 @@ withDefaults(defineProps<{
   progressValue: number;
   result: string;
   rowCount: number;
+  stateOptions?: string[];
 }>(), {
   progressValue: 0,
+  stateOptions: () => [],
 });
 
 const emit = defineEmits<{
@@ -57,6 +59,8 @@ const bracketTokenTypes = defineModel<LineLengthBracketTokenType[]>(
   "bracketTokenTypes",
   { required: true },
 );
+const activeStates = defineModel<string[]>("activeStates", { default: [] });
+const useFixedFallback = defineModel<boolean>("useFixedFallback", { default: true });
 const widthRules = defineModel<Record<LineLengthCharacterType, LineLengthWidthRule>>(
   "widthRules",
   { required: true },
@@ -106,6 +110,21 @@ function updateRuleFixed(type: LineLengthCharacterType, value: string) {
     },
   };
 }
+
+function toggleStateActive(state: string) {
+  const selectedStates = new Set(activeStates.value);
+  if (selectedStates.has(state)) {
+    if (selectedStates.size <= 1 && selectedStates.has(state)) return;
+    selectedStates.delete(state);
+  } else {
+    selectedStates.add(state);
+  }
+  activeStates.value = Array.from(selectedStates);
+}
+
+function isStateActive(state: string) {
+  return activeStates.value.includes(state);
+}
 </script>
 
 <template>
@@ -134,7 +153,10 @@ function updateRuleFixed(type: LineLengthCharacterType, value: string) {
         </label>
       </div>
 
-      <p class="summary">{{ t("stats.rows") }}: {{ rowCount }}</p>
+      <div class="summary">
+        <span>{{ t("stats.rows") }}: {{ rowCount }}</span>
+        <span>{{ t("stats.targetTranslatedText") }}</span>
+      </div>
 
       <p class="help-text">
         {{ t("lineLength.help") }}
@@ -155,6 +177,28 @@ function updateRuleFixed(type: LineLengthCharacterType, value: string) {
           <span>&lt;&gt;</span>
         </label>
       </fieldset>
+
+      <fieldset v-if="stateOptions.length > 0" class="option-group">
+        <legend>{{ t("stats.validEncodingStates") }} ({{ t("stats.stateBothShort") }})</legend>
+        <div class="choice-button-group">
+          <button
+            v-for="state in stateOptions"
+            :key="state"
+            type="button"
+            class="choice-button"
+            :class="{ active: isStateActive(state) }"
+            :aria-pressed="isStateActive(state)"
+            @click="toggleStateActive(state)"
+          >
+            {{ state }}
+          </button>
+        </div>
+      </fieldset>
+
+      <label class="checkbox-line fallback-toggle">
+        <input v-model="useFixedFallback" type="checkbox" />
+        <span>{{ t("lineLength.useFixedFallback") }}</span>
+      </label>
 
       <fieldset class="width-rules">
         <legend>{{ t("lineLength.widthRules") }}</legend>
@@ -268,6 +312,10 @@ function updateRuleFixed(type: LineLengthCharacterType, value: string) {
 }
 
 .summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  align-items: center;
   margin: 7px 0 0;
   color: var(--text-soft);
   font-size: 12px;
@@ -311,6 +359,48 @@ function updateRuleFixed(type: LineLengthCharacterType, value: string) {
   display: inline-flex;
   align-items: center;
   gap: 6px;
+}
+
+.fallback-toggle {
+  margin: 8px 0 0;
+  color: var(--text-soft);
+  font-size: 12px;
+  line-height: 1.25;
+}
+
+.choice-button-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  align-items: center;
+}
+
+.choice-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 28px;
+  border: 1px solid var(--control-border);
+  border-radius: 6px;
+  padding: 4px 10px;
+  color: var(--control-text);
+  background: var(--panel-bg);
+  font-size: 13px;
+  line-height: 1.25;
+  cursor: pointer;
+  user-select: none;
+}
+
+.choice-button input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.choice-button.active {
+  border-color: var(--primary-hover);
+  color: var(--on-accent);
+  background: var(--primary);
 }
 
 .width-rule {

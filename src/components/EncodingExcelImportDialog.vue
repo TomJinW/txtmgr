@@ -20,6 +20,7 @@ const startRow = defineModel<number>("startRow", { required: true });
 const charColumn = defineModel<string>("charColumn", { required: true });
 const codeColumn = defineModel<string>("codeColumn", { required: true });
 const widthColumn = defineModel<string>("widthColumn", { required: true });
+const stateColumn = defineModel<string>("stateColumn", { required: true });
 const noteColumn = defineModel<string>("noteColumn", { required: true });
 const appendRows = defineModel<boolean>("appendRows", { required: true });
 const input = ref<HTMLInputElement | null>(null);
@@ -96,6 +97,15 @@ watch(
           <span>{{ t("dialog.widthColumnOptional") }}</span>
           <input
             v-model="widthColumn"
+            type="text"
+            inputmode="numeric"
+            :placeholder="t('dialog.optional')"
+          />
+        </label>
+        <label>
+          <span>{{ t("dialog.stateColumnOptional") }}</span>
+          <input
+            v-model="stateColumn"
             type="text"
             inputmode="numeric"
             :placeholder="t('dialog.optional')"

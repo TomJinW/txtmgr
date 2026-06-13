@@ -1,5 +1,6 @@
 import type {
   CjkFallbackMode,
+  EncodingStateValue,
   SentenceRow,
   StateValue,
   TextMatchMode,
@@ -42,6 +43,12 @@ export const stateOptions: StateValue[] = [
   "1️⃣custom1",
   "2️⃣custom2",
   "3️⃣custom3",
+];
+
+export const encodingStateOptions: EncodingStateValue[] = [
+  "original",
+  "translated",
+  "both",
 ];
 
 export const themeOptions: { label: string; value: ThemeMode }[] = [
