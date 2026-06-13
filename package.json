@@ -8,7 +8,9 @@
     "build": "vue-tsc --noEmit && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
-    "tauri:build:exe": "tauri build --no-bundle"
+    "tauri:build:exe": "tauri build --no-bundle",
+    "tauri:build:exe:win-x64": "tauri build --no-bundle --target x86_64-pc-windows-msvc",
+    "tauri:build:exe:win-arm64": "tauri build --no-bundle --target aarch64-pc-windows-msvc"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",
