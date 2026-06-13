@@ -377,6 +377,12 @@ type TranslationKey =
   | "llm.project"
   | "llm.extraRequestJson"
   | "llm.extraRequestHelp"
+  | "llm.compatibilityTitle"
+  | "llm.compatibilityHelp"
+  | "llm.compatibilityOpenAI"
+  | "llm.compatibilityClaude"
+  | "llm.compatibilityGemini"
+  | "llm.compatibilityLocal"
   | "llm.testConnection"
   | "llm.testing"
   | "llm.timeoutSaved"
@@ -835,6 +841,12 @@ const translations: Record<AppLanguage, Record<TranslationKey, string>> = {
     "llm.project": "Project",
     "llm.extraRequestJson": "Extra request JSON",
     "llm.extraRequestHelp": "Optional JSON object merged into the chat/completions request body. Useful for local model options such as disabling thinking. A single field fragment is also accepted.",
+    "llm.compatibilityTitle": "OpenAI-compatible connection",
+    "llm.compatibilityHelp": "This app sends chat/completions-style requests. Claude and Gemini can be used through their OpenAI-compatible endpoints by changing Base URL, API key, and model name.",
+    "llm.compatibilityOpenAI": "OpenAI: https://api.openai.com/v1",
+    "llm.compatibilityClaude": "Claude: https://api.anthropic.com/v1",
+    "llm.compatibilityGemini": "Gemini: https://generativelanguage.googleapis.com/v1beta/openai",
+    "llm.compatibilityLocal": "Local servers: LM Studio http://127.0.0.1:1234/v1 or Ollama http://localhost:11434/v1",
     "llm.testConnection": "Test Connection",
     "llm.testing": "Testing...",
     "llm.timeoutSaved": "Timeout seconds saved.",
@@ -1292,6 +1304,12 @@ const translations: Record<AppLanguage, Record<TranslationKey, string>> = {
     "llm.project": "Project",
     "llm.extraRequestJson": "额外请求 JSON",
     "llm.extraRequestHelp": "可选 JSON object，会合并进 chat/completions 请求 body。可用于本地模型参数，比如关闭 thinking。也可以只填写单个字段片段。",
+    "llm.compatibilityTitle": "OpenAI-compatible 连接",
+    "llm.compatibilityHelp": "本 App 发送 chat/completions 风格请求。Claude 和 Gemini 可以通过它们的 OpenAI-compatible endpoint 使用，只需要改 Base URL、API Key 和模型名。",
+    "llm.compatibilityOpenAI": "OpenAI: https://api.openai.com/v1",
+    "llm.compatibilityClaude": "Claude: https://api.anthropic.com/v1",
+    "llm.compatibilityGemini": "Gemini: https://generativelanguage.googleapis.com/v1beta/openai",
+    "llm.compatibilityLocal": "本地服务器: LM Studio http://127.0.0.1:1234/v1 或 Ollama http://localhost:11434/v1",
     "llm.testConnection": "测试连接",
     "llm.testing": "测试中...",
     "llm.timeoutSaved": "超时时间已保存。",

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted } from "vue";
+import { onBeforeUnmount, onMounted, ref } from "vue";
 import { t } from "../i18n";
 
 export type LlmProviderMode = "local" | "cloud";
@@ -36,6 +36,8 @@ const emit = defineEmits<{
   update: [settings: LlmServerSettings];
 }>();
 
+const isCompatibilityHelpOpen = ref(false);
+
 onMounted(() => {
   window.addEventListener("keydown", handleDialogKeydown);
 });
@@ -62,6 +64,10 @@ function updateTimeoutSeconds(value: string) {
 function handleDialogKeydown(event: KeyboardEvent) {
   if (event.key !== "Escape") return;
   event.preventDefault();
+  if (isCompatibilityHelpOpen.value) {
+    isCompatibilityHelpOpen.value = false;
+    return;
+  }
   emit("close");
 }
 
@@ -77,7 +83,17 @@ function handleDialogKeydown(event: KeyboardEvent) {
       @submit.prevent="emit('close')"
     >
       <header class="dialog-header">
-        <h2 id="llm-settings-title">{{ t("llm.title") }}</h2>
+        <div class="dialog-title-row">
+          <h2 id="llm-settings-title">{{ t("llm.title") }}</h2>
+          <button
+            class="help-icon-button"
+            type="button"
+            :aria-label="t('llm.compatibilityTitle')"
+            @click="isCompatibilityHelpOpen = true"
+          >
+            ?
+          </button>
+        </div>
         <p>{{ t("llm.subtitle") }}</p>
       </header>
 
@@ -110,7 +126,7 @@ function handleDialogKeydown(event: KeyboardEvent) {
           <input
             :value="settings.baseUrl"
             type="url"
-            placeholder="http://localhost:11434/v1 or https://api.example.com/v1"
+            placeholder="https://api.openai.com/v1, https://api.anthropic.com/v1..."
             @input="updateField('baseUrl', ($event.target as HTMLInputElement).value)"
           />
         </label>
@@ -120,7 +136,7 @@ function handleDialogKeydown(event: KeyboardEvent) {
           <input
             :value="settings.model"
             type="text"
-            placeholder="gpt-4.1, llama3.1, qwen..."
+            placeholder="gpt-4.1, claude-sonnet-4-5, gemini-2.5-pro, llama..."
             @input="updateField('model', ($event.target as HTMLInputElement).value)"
           />
         </label>
@@ -214,6 +230,43 @@ function handleDialogKeydown(event: KeyboardEvent) {
         </button>
         <button type="submit">{{ t("common.done") }}</button>
       </div>
+
+      <div
+        v-if="isCompatibilityHelpOpen"
+        class="compatibility-help-backdrop"
+        role="presentation"
+        @click.self="isCompatibilityHelpOpen = false"
+      >
+        <section
+          class="compatibility-help"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="llm-compatibility-title"
+        >
+          <header>
+            <h3 id="llm-compatibility-title">{{ t("llm.compatibilityTitle") }}</h3>
+            <button
+              type="button"
+              :aria-label="t('common.close')"
+              @click="isCompatibilityHelpOpen = false"
+            >
+              ×
+            </button>
+          </header>
+          <p>{{ t("llm.compatibilityHelp") }}</p>
+          <ul>
+            <li>{{ t("llm.compatibilityOpenAI") }}</li>
+            <li>{{ t("llm.compatibilityClaude") }}</li>
+            <li>{{ t("llm.compatibilityGemini") }}</li>
+            <li>{{ t("llm.compatibilityLocal") }}</li>
+          </ul>
+          <footer>
+            <button type="button" @click="isCompatibilityHelpOpen = false">
+              {{ t("common.close") }}
+            </button>
+          </footer>
+        </section>
+      </div>
     </form>
   </div>
 </template>
@@ -246,6 +299,112 @@ function handleDialogKeydown(event: KeyboardEvent) {
 
 .dialog-header p {
   color: var(--text-soft);
+  font-size: 12px;
+}
+
+.dialog-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.help-icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: 1px solid var(--control-border);
+  border-radius: 999px;
+  padding: 0;
+  color: var(--control-text);
+  background: var(--table-header-bg);
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.help-icon-button:hover {
+  border-color: var(--primary);
+  color: var(--primary);
+}
+
+.compatibility-help-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 5;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+  background: rgba(8, 12, 20, 0.38);
+}
+
+.compatibility-help {
+  width: min(560px, calc(100vw - 36px));
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+  color: var(--text-soft);
+  background: var(--panel-bg);
+  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.32);
+  font-size: 12px;
+}
+
+.compatibility-help header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.compatibility-help h3 {
+  margin: 0;
+  color: var(--text);
+  font-size: 14px;
+}
+
+.compatibility-help header button {
+  width: 26px;
+  height: 26px;
+  border: 1px solid var(--control-border);
+  border-radius: 6px;
+  padding: 0;
+  color: var(--control-text);
+  background: var(--panel-bg);
+  font-size: 18px;
+  line-height: 1;
+}
+
+.compatibility-help p,
+.compatibility-help ul {
+  margin: 0;
+}
+
+.compatibility-help ul {
+  display: grid;
+  gap: 4px;
+  padding-left: 18px;
+}
+
+.compatibility-help p {
+  margin-bottom: 8px;
+  line-height: 1.35;
+}
+
+.compatibility-help footer {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 12px;
+}
+
+.compatibility-help footer button {
+  min-height: 28px;
+  border: 1px solid var(--control-border);
+  border-radius: 6px;
+  padding: 4px 10px;
+  color: var(--control-text);
+  background: var(--panel-bg);
   font-size: 12px;
 }
 
