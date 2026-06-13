@@ -5646,13 +5646,13 @@ button {
 .encoding-shell,
 .encoding-shell * {
   scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
-  scrollbar-width: thin;
+  scrollbar-width: auto;
 }
 
 .encoding-shell::-webkit-scrollbar,
 .encoding-shell *::-webkit-scrollbar {
-  width: 16px;
-  height: 16px;
+  width: 24px;
+  height: 24px;
 }
 
 .encoding-shell::-webkit-scrollbar-track,

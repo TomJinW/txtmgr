@@ -6521,7 +6521,7 @@ button {
 .app-shell,
 .app-shell * {
   scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
-  scrollbar-width: thin;
+  scrollbar-width: auto;
 }
 
 .app-shell::-webkit-scrollbar,
